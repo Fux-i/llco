@@ -22,11 +22,35 @@ task<int> top() {
     co_return value + 1;
 }
 
+task<> log(const char *what) {
+    std::cout << "    [log] " << what << '\n';
+    co_return;
+}
+
+task<> step(const char *name) {
+    std::cout << "  [" << name << "] in\n";
+    co_await log(name);
+    std::cout << "  [" << name << "] out\n";
+    co_return;
+}
+
+task<> run() {
+    std::cout << "[run] start\n";
+    co_await step("A");
+    co_await step("B");
+    std::cout << "[run] end\n";
+    co_return;
+}
+
 int main() {
     auto task = top();
     std::cout << "[main]   task.resume()\n";
     task.resume();
     const int result = task.result();
     std::cout << "[main]   task.resume() returned: top() == " << result << '\n';
-    return result == 24 ? 0 : 1;
+
+    auto t = run();
+    std::cout << "[main] t.resume()\n";
+    t.resume();
+    std::cout << "[main] resume return\n";
 }

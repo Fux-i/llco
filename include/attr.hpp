@@ -16,4 +16,4 @@
     classname(classname &&)                 = default;                                             \
     classname &operator=(classname &&)      = default;                                             \
     classname(const classname &)            = delete;                                              \
-    classname &operator=(const classname &) = delete;\
+    classname &operator=(const classname &) = delete;

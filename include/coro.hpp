@@ -5,22 +5,18 @@
 #include <exception>
 #include <optional>
 #include <stdexcept>
-#include <utility>
 
 namespace llco {
 
 template <typename T>
 class task;
 
-template <typename T>
-struct promise {
-    using task_type   = task<T>;
+struct promise_base {
     using handle_type = std::coroutine_handle<>;
 
-  private:
+  protected:
     handle_type        m_continuation;
-    std::optional<T>   m_value;
-    std::exception_ptr m_except;
+    std::exception_ptr m_exception;
 
   public:
     friend struct final_awaiter;
@@ -39,25 +35,34 @@ struct promise {
         void await_resume() const noexcept {}
     };
 
-    promise()  = default;
-    ~promise() = default;
-    CLASS_NO_COPY_MOVE(promise);
+    promise_base()  = default;
+    ~promise_base() = default;
+    CLASS_NO_COPY_MOVE(promise_base);
 
     void set_continuation(handle_type handle) {
         m_continuation = handle;
     }
 
-    auto get_return_object() -> task_type {
-        auto handle = std::coroutine_handle<promise>::from_promise(*this);
-        return task<T>(handle);
-    }
     auto initial_suspend() -> std::suspend_always {
         return {};
     }
     auto final_suspend() noexcept -> final_awaiter {
         return {};
     }
+};
 
+template <typename T>
+struct promise : promise_base {
+    using task_type = task<T>;
+
+  private:
+    std::optional<T> m_value;
+
+  public:
+    auto get_return_object() -> task_type {
+        auto handle = std::coroutine_handle<promise>::from_promise(*this);
+        return task<T>(handle);
+    }
     void return_value(const T &value) {
         m_value.emplace(value);
     }
@@ -65,21 +70,19 @@ struct promise {
         m_value.emplace(std::move(value));
     }
     auto result() -> T {
-        if (m_except != nullptr)
-            std::rethrow_exception(m_except);
+        if (m_exception != nullptr)
+            std::rethrow_exception(m_exception);
         if (m_value.has_value())
             return std::move(*m_value);
-        else
-            throw std::runtime_error{
-                "The return value was never set, did you execute the coroutine?"};
+        throw std::runtime_error{"The return value was never set, did you execute the coroutine?"};
     }
 
     void unhandled_exception() {
-        m_except = std::current_exception();
+        m_exception = std::current_exception();
     }
 };
 
-template <typename T>
+template <typename T = void>
 class task {
   public:
     using promise_type = promise<T>;
@@ -110,9 +113,7 @@ class task {
         if (m_handle != nullptr)
             m_handle.destroy();
     }
-    task(const task &)            = delete;
-    task &operator=(const task &) = delete;
-    // task(task &&other) noexcept : m_handle(std::exchange(other.m_handle, nullptr)) {}
+    CLASS_NO_COPY_MOVE(task);
 
     auto operator co_await() -> awaiter {
         return awaiter{m_handle};
@@ -123,6 +124,25 @@ class task {
     }
     auto result() const -> T {
         return m_handle.promise().result();
+    }
+};
+
+template <>
+struct promise<void> : promise_base {
+    using task_type = task<void>;
+
+  public:
+    auto get_return_object() -> task_type {
+        auto handle = std::coroutine_handle<promise>::from_promise(*this);
+        return task_type(handle);
+    }
+    void return_void() {}
+    void result() {
+        if (m_exception != nullptr)
+            std::rethrow_exception(m_exception);
+    }
+    void unhandled_exception() {
+        m_exception = std::current_exception();
     }
 };
 } // namespace llco

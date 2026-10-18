@@ -11,10 +11,13 @@ Checks: >
   -readability-braces-around-statements,
   -readability-avoid-const-params-in-decls,
   -readability-named-parameter,
+  -readability-identifier-length,
   -readability-implicit-bool-conversion,
   -readability-use-anyofallof,
+  -readability-convert-member-functions-to-static,
   -bugprone-easily-swappable-parameters,
   -bugprone-exception-escape,
+  -bugprone-macro-parentheses,
   -bugprone-narrowing-conversions,
   -modernize-use-nodiscard,
 

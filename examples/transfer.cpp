@@ -1,4 +1,5 @@
-#include "coro.hpp"
+#include <llco/task.hpp>
+
 #include <iostream>
 
 using namespace llco;
@@ -11,14 +12,14 @@ task<int> leaf(int value) {
 task<int> middle(int input) {
     std::cout << "[middle] before co_await leaf\n";
     const int output = co_await leaf(input + 1);
-    std::cout << "[middle] resumed with " << output << ", co_await returned\n";
+    std::cout << "[middle] resumed with " << output << '\n';
     co_return output + 1;
 }
 
 task<int> top() {
     std::cout << "[top]    before co_await middle\n";
     const int value = co_await middle(10);
-    std::cout << "[top]    resumed with " << value << ", co_await returned\n";
+    std::cout << "[top]    resumed with " << value << '\n';
     co_return value + 1;
 }
 
@@ -43,14 +44,13 @@ task<> run() {
 }
 
 int main() {
-    auto task = top();
-    std::cout << "[main]   task.resume()\n";
-    task.resume();
-    const int result = task.result();
-    std::cout << "[main]   task.resume() returned: top() == " << result << '\n';
-
-    auto t = run();
-    std::cout << "[main] t.resume()\n";
+    auto t = top();
+    std::cout << "[main]   t.resume()\n";
     t.resume();
-    std::cout << "[main] resume return\n";
+    std::cout << "[main]   t.result() == " << t.result() << '\n';
+
+    auto chain = run();
+    std::cout << "[main] chain.resume()\n";
+    chain.resume();
+    std::cout << "[main] chain done\n";
 }

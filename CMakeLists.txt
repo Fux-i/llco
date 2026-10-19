@@ -1,23 +1,53 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
 
-set(PROJECT_NAME "llco")
+project(llco VERSION 1.0 LANGUAGES CXX)
 
-project(${PROJECT_NAME} VERSION 1.0 LANGUAGES CXX)
-
-# Enforce the use of C++23 standard
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-# Disable compiler-specific extensions like __attribute__((...))
-# set(CMAKE_CXX_EXTENSIONS OFF)
-# Use libc++ standard (with clang)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++ -fcoroutines")
-# build cache for clangd
-set(CMAKE_EXPORT_COMPILE_COMMANDS True)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-include_directories(include)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options(-stdlib=libc++)
+    add_link_options(-stdlib=libc++)
+endif()
 
-# Auto find all source files on files in src/ directory change
-file(GLOB_RECURSE SOURCES "src/*.c" "src/*.cc" "src/*.cpp")
-set_property(DIRECTORY PROPERTY CMAKE_CONFIGURE_DEPENDS ${SOURCES})
+enable_testing()
 
-add_executable(${PROJECT_NAME} ${SOURCES})
+include(FetchContent)
+FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG v1.18.0
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(googletest)
+
+include(GoogleTest)
+
+# Header-only core.
+add_library(llco INTERFACE)
+add_library(llco::llco ALIAS llco)
+target_include_directories(llco INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_features(llco INTERFACE cxx_std_23)
+
+# One executable per tests/*.cpp. CONFIGURE_DEPENDS re-globs at build time, so
+# a new test file needs no CMake edit.
+file(GLOB LLCO_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")
+foreach(source IN LISTS LLCO_TEST_SOURCES)
+    get_filename_component(name "${source}" NAME_WE)
+    add_executable(${name} "${source}")
+    target_link_libraries(${name} PRIVATE llco GTest::gtest_main)
+    gtest_discover_tests(${name})
+endforeach()
+
+# Same for examples and benches; outputs live under build/examples
+foreach(subdir examples bench)
+    file(GLOB LLCO_SUBDIR_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${subdir}/*.cpp")
+    foreach(source IN LISTS LLCO_SUBDIR_SOURCES)
+        get_filename_component(name "${source}" NAME_WE)
+        add_executable(${name} "${source}")
+        target_link_libraries(${name} PRIVATE llco)
+        set_target_properties(${name} PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/${subdir}")
+    endforeach()
+endforeach()

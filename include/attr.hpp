@@ -1,10 +1,10 @@
 #pragma once
 
-#define INLINE __attribute__((always_inline))
+#define LLCO_INLINE __attribute__((always_inline))
 
-#define AWAIT_HINT nodiscard("Don't forget to co_await")
-#define DISCARD_HINT nodiscard("Don't discard this")
-#define ALIGN alignas(64)
+#define LLCO_AWAIT_HINT nodiscard("Don't forget to co_await")
+#define LLCO_DISCARD_HINT nodiscard("Don't discard this")
+#define LLCO_ALIGN alignas(64)
 
 #define CLASS_NO_COPY_MOVE(classname)                                                              \
     classname(classname &&)                 = delete;                                              \

@@ -9,7 +9,7 @@
 namespace llco {
 
 template <typename T>
-class task;
+class [[LLCO_AWAIT_HINT]] task;
 
 struct promise_base {
     using handle_type = std::coroutine_handle<>;
@@ -20,6 +20,7 @@ struct promise_base {
 
   public:
     friend struct final_awaiter;
+    // transfer the workflow back to caller's continuation
     struct final_awaiter {
         auto await_ready() const noexcept -> bool {
             return false;
@@ -119,9 +120,10 @@ class task {
         return awaiter{m_handle};
     }
 
-    auto resume() const -> void {
+    void resume() const {
         m_handle.resume();
     }
+    [[LLCO_DISCARD_HINT]]
     auto result() const -> T {
         return m_handle.promise().result();
     }

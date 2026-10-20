@@ -22,6 +22,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(googletest)
 
+FetchContent_Declare(
+    atomic_queue
+    GIT_REPOSITORY https://github.com/max0x7ba/atomic_queue.git
+    GIT_TAG v1.9.4
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(atomic_queue)
+
 include(GoogleTest)
 
 # Header-only core.
@@ -29,6 +37,7 @@ add_library(llco INTERFACE)
 add_library(llco::llco ALIAS llco)
 target_include_directories(llco INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(llco INTERFACE cxx_std_23)
+target_link_libraries(llco INTERFACE atomic_queue::atomic_queue)
 
 # One executable per tests/*.cpp. CONFIGURE_DEPENDS re-globs at build time, so
 # a new test file needs no CMake edit.

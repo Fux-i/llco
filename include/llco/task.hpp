@@ -120,6 +120,10 @@ class task {
         return awaiter{m_handle};
     }
 
+    [[nodiscard]]
+    auto handle() const noexcept -> handle_type {
+        return m_handle;
+    }
     void resume() const {
         m_handle.resume();
     }

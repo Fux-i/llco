@@ -136,12 +136,12 @@ TEST(spawn, full_queue_returns_false) {
     bool   second = false;
     engine e;
 
-    for (unsigned i = 0; i < queue_capacity; ++i)
+    for (unsigned i = 0; i < QUEUE_CAPACITY; ++i)
         EXPECT_TRUE(e.spawn(watch(probe{&first})));
 
     EXPECT_FALSE(e.spawn(watch(probe{&second}))) << "spawn accepted a task into a full queue";
     EXPECT_TRUE(second) << "the rejected frame leaked";
 
-    EXPECT_EQ(e.drain(), queue_capacity);
+    EXPECT_EQ(e.drain(), QUEUE_CAPACITY);
     EXPECT_TRUE(first);
 }

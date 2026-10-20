@@ -62,13 +62,13 @@
 **先写的失败测试**
 
 - `engine.manual_runs_handles_in_fifo_order`
-- `engine.add_fails_when_full`（按 `queue_capacity` 填满，第 N+1 个返回 false）
+- `engine.add_fails_when_full`（按 `QUEUE_CAPACITY` 填满，第 N+1 个返回 false）
 - `engine.drain_returns_count`
 
 **实现顺序**
 
 1. `queue.decl.hpp`：`queue_backend` 别名指向 `atomic_queue::AtomicQueue2<T, Cap>`，外面包一层二十行的适配器（`try_push` / `try_pop` 转发）；engine 的成员直接写 `queue<std::coroutine_handle<>>`，用哪种队列一目了然，将来换实现只改 `queue_backend` 这一处。
-2. `config.hpp`：`inline constexpr unsigned queue_capacity = 8192;`（先手写，M0 的 CMake 变量以后再接）。
+2. `config.hpp`：`inline constexpr unsigned QUEUE_CAPACITY = 8192;`（先手写，M0 的 CMake 变量以后再接）。
 3. `engine`（具体类，不是模板）：成员一个 `queue<std::coroutine_handle<>> m_queue`，`stopped` 标志留给 M5；manual 模式不建线程、不建 ring。
 4. `bool try_add(handle)` / `void add(handle)` / `bool run_once()` / `std::size_t drain()`。
 5. 测试用一个最小的协程工厂产出句柄（或直接复用 `task<>`）。

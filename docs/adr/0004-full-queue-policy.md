@@ -12,6 +12,6 @@
 ## Consequences
 
 - `add` / `submit` 的返回值必须被检查（atomic_queue 的 `try_push` / `try_pop` 是 `[[nodiscard]]`）。
-- 满载路径按 `queue_capacity` 填满写成确定性测试：容量是构建级常量，engine 不按容量参数化，测试里的断言必须容量相对。
+- 满载路径按 `QUEUE_CAPACITY` 填满写成确定性测试：容量是构建级常量，engine 不按容量参数化，测试里的断言必须容量相对。
 - `spawn` 在转移所有权之后没有退路：队列满时销毁已移交的帧并返回 false。这个失败是**终局**的，不能换 engine 重试；需要重试的放置层（M8）必须先探测出空位再移交所有权。
 - `engine` 必须比它 spawn 出去的任务活得久（异常处理函数指针指向 engine 的成员），关停时由 M5 的循环负责排空。

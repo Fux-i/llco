@@ -44,8 +44,8 @@ TEST(engine, add_fails_when_full) {
     engine e;
 
     std::vector<std::coroutine_handle<>> frames; // the test owns the frames
-    frames.reserve(queue_capacity);
-    for (unsigned i = 0; i < queue_capacity; ++i) {
+    frames.reserve(QUEUE_CAPACITY);
+    for (unsigned i = 0; i < QUEUE_CAPACITY; ++i) {
         frames.push_back(noop().release());
         EXPECT_TRUE(e.try_add(frames.back()));
     }
@@ -54,7 +54,7 @@ TEST(engine, add_fails_when_full) {
     EXPECT_FALSE(e.try_add(extra)) << "queue accepted one handle past capacity";
     extra.destroy();
 
-    EXPECT_EQ(e.drain(), queue_capacity);
+    EXPECT_EQ(e.drain(), QUEUE_CAPACITY);
     for (auto frame : frames)
         frame.destroy();
 }

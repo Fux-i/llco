@@ -23,7 +23,7 @@ Checks: >
 
 WarningsAsErrors: ""
 
-HeaderFilterRegex: "(src|tests)/.*"
+HeaderFilterRegex: "(include|tests)/.*"
 
 CheckOptions:
   # Naming conventions matching project style
@@ -45,6 +45,8 @@ CheckOptions:
     value: lower_case
   - key: readability-identifier-naming.VariableCase
     value: lower_case
+  - key: readability-identifier-naming.GlobalConstantCase
+    value: UPPER_CASE
   - key: readability-identifier-naming.ParameterCase
     value: lower_case
   - key: readability-identifier-naming.MemberCase

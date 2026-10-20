@@ -9,11 +9,11 @@
 namespace llco {
 
 // AtomicQueue2, not AtomicQueue: the latter marks empty slots with a nil element.
-template <class T, unsigned Cap = queue_capacity>
+template <class T, unsigned Cap = QUEUE_CAPACITY>
 using queue_backend = atomic_queue::AtomicQueue2<T, Cap>;
 
 // Bounded MPMC queue; Cap is rounded up to a power of two by the backend.
-template <class T, unsigned Cap = queue_capacity>
+template <class T, unsigned Cap = QUEUE_CAPACITY>
 class queue {
   private:
     queue_backend<T, Cap> m_impl;

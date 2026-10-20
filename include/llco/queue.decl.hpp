@@ -4,6 +4,7 @@
 #include "config.hpp"
 
 #include <atomic_queue/atomic_queue.h>
+#include <coroutine>
 
 namespace llco {
 

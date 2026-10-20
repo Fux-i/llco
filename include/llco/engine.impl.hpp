@@ -18,13 +18,11 @@ inline void default_exception_handler(std::exception_ptr e) {
     std::terminate();
 }
 
-template <class Q>
-auto engine<Q>::try_add(handle_type handle) noexcept -> bool {
+inline auto engine::try_add(handle_type handle) noexcept -> bool {
     return m_queue.try_push(handle);
 }
 
-template <class Q>
-auto engine<Q>::run_once() -> bool {
+inline auto engine::run_once() -> bool {
     handle_type handle;
     if (!m_queue.try_pop(handle))
         return false;
@@ -32,17 +30,15 @@ auto engine<Q>::run_once() -> bool {
     return true;
 }
 
-template <class Q>
-auto engine<Q>::drain() -> std::size_t {
+inline auto engine::drain() -> std::size_t {
     std::size_t count = 0;
     while (run_once())
         ++count;
     return count;
 }
 
-template <class Q>
 template <class T>
-auto engine<Q>::spawn(task<T> &&t) noexcept -> bool {
+auto engine::spawn(task<T> &&t) noexcept -> bool {
     auto handle = t.release();
     handle.promise().set_detached(m_exception_handler);
     if (!try_add(handle)) {
@@ -52,8 +48,7 @@ auto engine<Q>::spawn(task<T> &&t) noexcept -> bool {
     return true;
 }
 
-template <class Q>
-void engine<Q>::set_exception_handler(exception_handler handler) {
+inline void engine::set_exception_handler(exception_handler handler) {
     m_exception_handler = std::move(handler);
 }
 

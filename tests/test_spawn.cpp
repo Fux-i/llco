@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <llco/config.hpp>
 #include <llco/engine.decl.hpp>
 #include <llco/task.hpp>
 
@@ -74,8 +75,8 @@ TEST(task, release_transfers_ownership) {
 }
 
 TEST(spawn, runs_and_destroys_frame) {
-    bool     destroyed = false;
-    engine<> e;
+    bool   destroyed = false;
+    engine e;
 
     EXPECT_TRUE(e.spawn(watch(probe{&destroyed})));
     EXPECT_FALSE(destroyed) << "spawn ran the task before the engine was driven";
@@ -85,8 +86,8 @@ TEST(spawn, runs_and_destroys_frame) {
 }
 
 TEST(spawn, value_task_destroys_frame) {
-    bool     destroyed = false;
-    engine<> e;
+    bool   destroyed = false;
+    engine e;
 
     EXPECT_TRUE(e.spawn(counted(probe{&destroyed}, 7)));
     EXPECT_EQ(e.drain(), 1U);
@@ -96,7 +97,7 @@ TEST(spawn, value_task_destroys_frame) {
 
 TEST(spawn, exception_goes_to_handler) {
     std::exception_ptr caught;
-    engine<>           e;
+    engine             e;
     e.set_exception_handler([&caught](std::exception_ptr ep) { caught = ep; });
 
     EXPECT_TRUE(e.spawn(fail()));
@@ -108,7 +109,7 @@ TEST(spawn, exception_goes_to_handler) {
 
 TEST(spawn, child_exception_goes_to_handler) {
     std::exception_ptr caught;
-    engine<>           e;
+    engine             e;
     e.set_exception_handler([&caught](std::exception_ptr ep) { caught = ep; });
 
     EXPECT_TRUE(e.spawn(parent()));
@@ -120,7 +121,7 @@ TEST(spawn, child_exception_goes_to_handler) {
 
 TEST(spawn, non_std_exception_goes_to_handler) {
     std::exception_ptr caught;
-    engine<>           e;
+    engine             e;
     e.set_exception_handler([&caught](std::exception_ptr ep) { caught = ep; });
 
     EXPECT_TRUE(e.spawn(fail_raw()));
@@ -131,15 +132,16 @@ TEST(spawn, non_std_exception_goes_to_handler) {
 }
 
 TEST(spawn, full_queue_returns_false) {
-    bool first  = false;
-    bool second = false;
+    bool   first  = false;
+    bool   second = false;
+    engine e;
 
-    engine<queue<std::coroutine_handle<>, 1>> e;
+    for (unsigned i = 0; i < queue_capacity; ++i)
+        EXPECT_TRUE(e.spawn(watch(probe{&first})));
 
-    EXPECT_TRUE(e.spawn(watch(probe{&first})));
     EXPECT_FALSE(e.spawn(watch(probe{&second}))) << "spawn accepted a task into a full queue";
     EXPECT_TRUE(second) << "the rejected frame leaked";
 
-    EXPECT_EQ(e.drain(), 1U);
+    EXPECT_EQ(e.drain(), queue_capacity);
     EXPECT_TRUE(first);
 }

@@ -15,10 +15,9 @@ namespace llco {
 inline void default_exception_handler(std::exception_ptr e);
 
 // Single-threaded context; manual mode means the caller drives it.
-template <class Q = queue<std::coroutine_handle<>>>
 class engine {
   private:
-    Q                                       m_queue;
+    queue<std::coroutine_handle<>>          m_queue;
     std::function<void(std::exception_ptr)> m_exception_handler = default_exception_handler;
 
   public:

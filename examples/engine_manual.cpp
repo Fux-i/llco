@@ -30,7 +30,7 @@ int main() {
     auto root = top();
     std::cout << "[main] task is lazy: nothing has run yet\n";
 
-    engine<> e;
+    engine e;
     std::cout << "[main] try_add -> " << e.try_add(root.handle()) << '\n';
 
     std::cout << "[main] run_once() resumes one handle, and the whole chain runs inline\n";

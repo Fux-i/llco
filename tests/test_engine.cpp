@@ -1,8 +1,9 @@
 #include <gtest/gtest.h>
+#include <llco/config.hpp>
 #include <llco/engine.decl.hpp>
-#include <llco/queue.decl.hpp>
 #include <llco/task.hpp>
 
+#include <coroutine>
 #include <vector>
 
 using namespace llco;
@@ -16,11 +17,15 @@ task<> record(int id) {
     co_return;
 }
 
+task<> noop() {
+    co_return;
+}
+
 } // namespace
 
 TEST(engine, manual_runs_handles_in_fifo_order) {
     g_log.clear();
-    engine<> e;
+    engine e;
 
     auto first  = record(1);
     auto second = record(2);
@@ -36,28 +41,27 @@ TEST(engine, manual_runs_handles_in_fifo_order) {
 }
 
 TEST(engine, add_fails_when_full) {
-    g_log.clear();
-    engine<queue<std::coroutine_handle<>, 4>> e;
+    engine e;
 
-    auto one   = record(1);
-    auto two   = record(2);
-    auto three = record(3);
-    auto four  = record(4);
-    auto five  = record(5);
+    std::vector<std::coroutine_handle<>> frames; // the test owns the frames
+    frames.reserve(queue_capacity);
+    for (unsigned i = 0; i < queue_capacity; ++i) {
+        frames.push_back(noop().release());
+        EXPECT_TRUE(e.try_add(frames.back()));
+    }
 
-    EXPECT_TRUE(e.try_add(one.handle()));
-    EXPECT_TRUE(e.try_add(two.handle()));
-    EXPECT_TRUE(e.try_add(three.handle()));
-    EXPECT_TRUE(e.try_add(four.handle()));
-    EXPECT_FALSE(e.try_add(five.handle())) << "a 4-slot queue accepted a 5th handle";
+    auto extra = noop().release();
+    EXPECT_FALSE(e.try_add(extra)) << "queue accepted one handle past capacity";
+    extra.destroy();
 
-    EXPECT_EQ(e.drain(), 4U);
-    EXPECT_EQ(g_log, (std::vector<int>{1, 2, 3, 4}));
+    EXPECT_EQ(e.drain(), queue_capacity);
+    for (auto frame : frames)
+        frame.destroy();
 }
 
 TEST(engine, drain_returns_count) {
     g_log.clear();
-    engine<> e;
+    engine e;
 
     EXPECT_EQ(e.drain(), 0U) << "an empty engine must drain nothing";
 

@@ -110,7 +110,7 @@ include/llco/
 四条硬规则：
 
 1. **入口只有一个**：`*.decl.hpp` 末尾 `#include "同模块.impl.hpp"`；`*.impl.hpp` 顶部反过来 include `.decl.hpp`（`#pragma once` 兜住循环）。用户永远只 include `.decl.hpp`，不存在"忘了 include impl 导致链接错误"。
-2. **非模板函数必须 `inline`**：写在类外的成员函数/自由函数都要 `inline`（类内定义不用）。engine 是类模板所以天然安全；`scheduler`、`trace` 这类非模板的靠纪律。
+2. **非模板函数必须 `inline`**：写在类外的成员函数/自由函数都要 `inline`（类内定义不用）。engine、scheduler、trace 都是具体类（engine 不按队列参数化，只认 `queue_type`），所以 `*.impl.hpp` 里每个定义都要自己加 `inline`。
 3. **纯概念文件不拆**：`executor.decl.hpp`、`config.hpp` 没有 impl。
 4. **伞头文件只给使用者**：`llco.hpp` 只 include 各模块的 `.decl.hpp` 与单文件头；内部头一律精确 include、不得 include 伞头文件；tests 保持精确 include，用来验证每个头文件自包含。可选或重型模块（trace、io）默认不进伞。
 
@@ -118,7 +118,7 @@ include/llco/
 
 | 模块 | 机制 | 换法 |
 |---|---|---|
-| queue | C++20 concept + 别名 | 改 `config.hpp` 里的 `queue_type`（或 CMake 变量 `LLCO_QUEUE`） |
+| queue | 别名 + 薄适配器 | 改 `queue.decl.hpp` 里的 `queue_backend`（容量常量在 `config.hpp`）；队列装什么元素由使用方自己写，engine 的成员类型在 `engine.decl.hpp` |
 | 放置策略 | runtime 多态（调用频率低） | 构造 scheduler 时传入 |
 | IO | 只有一个实现（io_uring），具体类 + 极窄接缝 | 出现第二个后端时再抽接口 |
 | trace | 编译期开关 | `LLCO_TRACE=ON`（默认关，零开销） |

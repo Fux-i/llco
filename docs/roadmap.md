@@ -108,26 +108,44 @@
 
 **目标**：`co_await resume_on(e)` 把当前协程的句柄投进目标 engine，而不是内联继续。
 
-**改动**：`include/llco/executor.decl.hpp`（概念）、`resume_on` 头文件、测试。
+**改动**：`include/llco/executor.decl.hpp`（`Executor` 概念，不拆 impl）、`include/llco/resume_on.hpp`（模板 awaiter + 工厂，单文件）、`tests/test_resume_on.cpp`、`examples/resume_on.cpp`、伞头文件。
 
-**先写的失败测试**：`resume_on.hops_through_queue`（manual engine：await 之后函数体没继续执行，`drain()` 之后才继续，用计数断言）。
+**先写的失败测试**
+
+- `resume_on.hops_through_queue`（manual engine：`run_once()` 之后函数体停在 await 点没继续，`drain()` 之后才继续，用计数断言）
+- `resume_on.full_queue_continues_inline`（队列满时内联继续，钉住 ADR-0004 的协程内路径）
 
 **实现顺序**
 
-1. 定义 `executor` 概念：只要求 `try_add(handle) -> bool`。
-2. awaiter：`await_ready()` 返回 false；`await_suspend(h)` 用对称传递表达"进得去就挂起，进不去就继续"：
+1. `executor.decl.hpp`：
 
 ```cpp
-auto await_suspend(std::coroutine_handle<> h) -> std::coroutine_handle<> {
+template <class E>
+concept Executor = requires(E& e, std::coroutine_handle<> h) {
+    { e.try_add(h) } -> std::same_as<bool>;
+};
+```
+
+只要求 `try_add` 返回 `bool`（不放松到 `convertible_to`，也不要求 `noexcept`）；概念名按 `.clang-tidy` 的 `ConceptCase` 用 CamelCase。
+
+2. `resume_on.hpp`：`resume_on_awaiter<E>` 持 `E&`；`await_ready()` 返回 false；`await_suspend(h)` 用对称传递表达"进得去就挂起，进不去就继续"：
+
+```cpp
+auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<> {
     return m_executor.try_add(h) ? std::noop_coroutine() : h;   // 满了就返回自己 = 立即继续
 }
 ```
 
-3. 跨线程版本留到 M8（那时才有多个 engine）。
+3. 工厂 `resume_on(E&) -> resume_on_awaiter<E>`，约束写作 `template <Executor E>`。概念在实例化时才检查，所以 `resume_on.hpp` 不 include `engine.decl.hpp`，一行 engine 类型都不用知道。
 
-**完成标志**：demo 打印"await 点 → drain 时 resume"。
+4. 跨线程版本留到 M8（那时才有多个 engine）。
 
-**坑**：**绝不要**在 `await_suspend` 里直接调 `h.resume()`（此时协程还没真正挂起完）；返回句柄才是正确姿势。
+**完成标志**：`ctest -R resume_on` 全绿；`examples/resume_on` 打印"await 点 → drain 时 resume"。
+
+**坑**
+
+- **绝不要**在 `await_suspend` 里直接调 `h.resume()`（此时协程还没真正挂起完）；返回句柄才是正确姿势。
+- 满载分支在单线程里**不能**靠 `spawn` 制造：从队列里跑出来的协程在 hop 之前已经腾出一个槽，`try_push` 必然成功。测试要手动 `resume()` 驱动那个协程，或者等 M5 用跨线程生产者撞满队列。
 
 ---
 

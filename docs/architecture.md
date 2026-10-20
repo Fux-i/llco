@@ -40,13 +40,16 @@ flowchart TB
 
 ## 关键概念
 
-- **executor 概念**：`resume_on` 唯一依赖的东西；engine、manual engine 都满足它：
+- **`Executor` 概念**：`resume_on` 唯一依赖的东西；engine、manual engine 都满足它。要求返回值**恰好**是 `bool`，不接受可隐式转换的 `int`：
 
 ```cpp
-concept executor = requires(E& e, std::coroutine_handle<> h) {
-    { e.try_add(h) } -> std::convertible_to<bool>;
+template <class E>
+concept Executor = requires(E& e, std::coroutine_handle<> h) {
+    { e.try_add(h) } -> std::same_as<bool>;
 };
 ```
+
+概念名用 CamelCase（`.clang-tidy` 的 `ConceptCase`），刻意和 lower_case 的具体类区分开。
 - **handle 是唯一的通货**：队列里只放 `std::coroutine_handle<>`（8 字节、可平凡拷贝）。awaiter 不放队列——它活在协程帧里，寿命与队列不一致。
 - **父协程**：一个协程结束后把控制权交回去的那个协程，也就是 `co_await` 它的那个协程。顶层任务没有父协程，控制权交回 `noop_coroutine`。
 
@@ -88,13 +91,14 @@ concept executor = requires(E& e, std::coroutine_handle<> h) {
 
 ## 文件布局约定
 
-除 `task.hpp`、`attr.hpp`、`config.hpp`、`llco.hpp` 四个单文件外，每个模块拆成 `*.decl.hpp` + `*.impl.hpp`，都放在 `include/llco/` 下；**没有 `src/` 目录**（纯 header-only，CMake 里 `llco` 是 INTERFACE 库）。
+除 `task.hpp`、`resume_on.hpp`、`attr.hpp`、`config.hpp`、`llco.hpp` 五个单文件外，每个模块拆成 `*.decl.hpp` + `*.impl.hpp`，都放在 `include/llco/` 下；**没有 `src/` 目录**（纯 header-only，CMake 里 `llco` 是 INTERFACE 库）。`task.hpp` 与 `resume_on.hpp` 是模板、没有可拆的非模板实现，所以单文件。
 
 ```
 include/llco/
   task.hpp  attr.hpp  config.hpp          # 单文件例外
   llco.hpp                                # 伞头文件：使用者只 include 它
   executor.decl.hpp                       # 只有一个 concept，不拆 impl
+  resume_on.hpp                           # 模板 awaiter，只依赖 Executor 概念
   queue.decl.hpp        queue.impl.hpp
   engine.decl.hpp       engine.impl.hpp
   scheduler.decl.hpp    scheduler.impl.hpp

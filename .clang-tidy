@@ -33,6 +33,8 @@ CheckOptions:
     value: CamelCase
   - key: readability-identifier-naming.TemplateParameterCase
     value: CamelCase
+  - key: readability-identifier-naming.ConceptCase
+    value: CamelCase
 #  - key: readability-identifier-naming.TypeAliasCase
 #    value: CamelCase
   - key: readability-identifier-naming.ClassCase

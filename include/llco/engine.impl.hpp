@@ -1,6 +1,11 @@
 #pragma once
 
+#include "config.hpp"
 #include "engine.decl.hpp"
+
+#if LLCO_TRACE
+#include "trace.decl.hpp"
+#endif
 
 #include <cstdio>
 #include <print>
@@ -27,6 +32,9 @@ inline auto engine::run_once() -> bool {
     handle_type handle;
     if (!m_queue.try_pop(handle))
         return false;
+#if LLCO_TRACE
+    const trace::scope slice{"resume"};
+#endif
     handle.resume();
     return true;
 }

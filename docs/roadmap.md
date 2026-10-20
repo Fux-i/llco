@@ -153,19 +153,30 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 **目标**：默认零开销的 Chrome Trace JSON 埋点，能在 Perfetto / chrome://tracing 里看到"每线程一条泳道 + 嵌套任务块"。
 
-**改动**：`trace.decl.hpp` + `trace.impl.hpp`、`engine.impl.hpp` 埋点、`config.hpp` 开关、带 trace 的 demo。
+**改动**：`include/llco/trace.decl.hpp` + `trace.impl.hpp`（`namespace llco::trace`，不是类/单例）、`engine.impl.hpp` 埋点（`#if LLCO_TRACE` 包住）、`config.hpp` 给 `LLCO_TRACE` 默认值、`CMakeLists.txt` 的 `option(LLCO_TRACE)`、`tests/test_trace.cpp`、`examples/trace.cpp`。
 
-**先写的失败测试**：`trace.emits_lane_metadata_and_paired_slices`（打开开关跑一个小 demo，断言 JSON 里有 `ph:"M"` 的 `thread_name`、每条 `B` 都有对应 `E`、同 tid 时间戳单调不减）。
+**先写的失败测试**
+
+- `trace.pairs_slices_and_names_lanes`（一次 `flush` 后断言 JSON 是数组、有 `ph:"M"` 的 `thread_name`、`B`/`E` 各两个且严格嵌套、ts 单调不减）
+- `trace.keeps_one_lane_per_thread`（另起一个 `std::thread` 打一个 slice，线程退出后 flush 仍要看到两条泳道 → 钉住"线程退出时把缓冲搬进 finished 列表"）
+- `trace.engine_emits_resume_slices`（`#if LLCO_TRACE` 包住，**只在 trace-on 树里存在**，默认树不编译）
 
 **实现顺序**
 
-1. `trace`：编译期开关（`LLCO_TRACE`）；`begin(name)` / `end()`；每线程一个缓冲，flush 时拼成一个 JSON 数组；`ts` 用微秒。
-2. engine 循环埋点：`resume` 前 `B`、返回后 `E`。`resume` 返回时整条 inline 链可能已经跑完或全部挂起——这正是我们要的 lane 语义。
-3. （可选）用 `trace_processor` 的 SQL 做自动断言，让 trace 变成回归测试的一部分。
+1. `trace`：`namespace llco::trace` + `set_thread_name` / `flush` 自由函数；`trace::scope` 是 RAII（构造发 `B`、析构发 `E`），`B/E` 只作为 detail 存在，从外面无法写出不配对的区间。
+2. 每线程一个 `thread_local lane`（events = `{const char* name, char phase, int64 ts}`，名字必须是字面量，不拷贝字符串）；lane 构造时把自己登记进全局注册表、析构时把数据 move 进 `finished` 列表。注册表在堆上**故意 leak**：主线程的 thread_local 可能在静态析构之后才析构。
+3. `flush(path)`：加锁遍历 `live` + `finished` 拼 JSON，写完**排空**（清空 events、清空 finished），返回是否写成功。`ts` 用 `steady_clock` 微秒。
+4. engine 埋点：`run_once()` 里 `resume()` 前后各一个 `trace::scope{"resume"}`，整段包在 `#if LLCO_TRACE` 里——默认构建里 `run_once()` 一行都不多。
+5. 另开一棵 trace-on 树验证埋点：`cmake -S . -B build/_trace -DLLCO_TRACE=ON`（**必须整棵树一致**，见坑）。
 
-**完成标志**：`LLCO_TRACE=1 ./build/examples/engine_manual` 生成 `trace.json`，浏览器打开可见泳道。
+**完成标志**：默认树 `ctest` 全绿；`build/_trace` 里 17/17 通过，`./build/_trace/examples/trace` 生成的 `trace.json` 能被 `python3 -m json.tool` 解析，且能看到 `resume` 包住 `work` 的嵌套块。
 
-**坑**：同一 tid 上时间戳必须单调不减、区间必须严格嵌套（Perfetto 规范）；跨线程续跑要用 async `b`/`n`/`e`（共享 `id`+`scope`）或 flow `s`/`t`/`f`，不能硬用 `B`/`E`。
+**坑**
+
+- **开关必须整棵树一致**：header-only + INTERFACE 库下，给单个 TU 单独加 `-DLLCO_TRACE=1` 会让同一个 `inline` 函数在不同 TU 里定义不同 → ODR 违反（IFNDR）。只允许 CMake option 全局打开。
+- **`flush` 必须排空**：同一进程里多个用例共用主线程的 lane，不排空的话后一个用例会看到前面用例的事件（这条是写测试时才发现的）。
+- 同一 tid 上时间戳必须单调不减、区间必须严格嵌套（Perfetto 规范）；跨线程续跑要用 async `b`/`n`/`e`（共享 `id`+`scope`）或 flow `s`/`t`/`f`，不能硬用 `B`/`E`——M8 跨引擎接力时才需要。
+- 本机**没有** `trace_processor`（也没有 `perfetto` Python 模块），所以自动断言只能用 `python3` + `json` 做结构校验；可视化靠人工把 `trace.json` 拖进 ui.perfetto.dev。
 
 ---
 

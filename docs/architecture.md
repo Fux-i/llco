@@ -52,6 +52,7 @@ concept Executor = requires(E& e, std::coroutine_handle<> h) {
 概念名用 CamelCase（`.clang-tidy` 的 `ConceptCase`），刻意和 lower_case 的具体类区分开。
 - **handle 是唯一的通货**：队列里只放 `std::coroutine_handle<>`（8 字节、可平凡拷贝）。awaiter 不放队列——它活在协程帧里，寿命与队列不一致。
 - **父协程**：一个协程结束后把控制权交回去的那个协程，也就是 `co_await` 它的那个协程。顶层任务没有父协程，控制权交回 `noop_coroutine`。
+- **trace 是环境级的**：`llco::trace` 是命名空间而非对象（不做单例）；`trace::scope` 构造发 `B`、析构发 `E`，RAII 保证配对；每线程一条泳道（`thread_local` 缓冲 + 全局注册表，线程退出时搬进 `finished`），`trace::flush(path)` 写出 Chromium JSON 并排空。引擎埋点受 `LLCO_TRACE` 编译期开关控制，默认 0 时 `run_once()` 一行都不多。
 
 ## 一次任务的生命周期
 
@@ -144,7 +145,7 @@ include/llco/
 - **io_uring / eventfd**：liburing 头 2.10 / 运行库 `.so.2` = 2.5（可用；链接时 `-luring` 放源文件之后）；`ulimit -l` = 64MB → 约 7954 个 64-entry ring，够用。
   - 实测：`read(eventfd)` 既能被内核的完成通知唤醒，也能被其它线程的 `write` 唤醒；一次通知可能对应多个完成；醒来时也可能什么都没有。
   - `io_uring_wait_cqe` 返回 `-EINTR` 且不重试——这也是不用它做阻塞点的原因之一（ADR-0003）。
-- **可视化**：本机 `perf` 无法录 sched tracepoint（tracefs 只读、`perf_event_paranoid=2`、无 sudo），统一走 **Chrome Trace JSON + Perfetto**；`trace_processor` 可用 SQL 校验 trace，不需要浏览器。
+- **可视化**：本机 `perf` 无法录 sched tracepoint（tracefs 只读、`perf_event_paranoid=2`、无 sudo），统一走 **Chrome Trace JSON + Perfetto**。本机**没有** `trace_processor`（也没有 `perfetto` Python 模块），所以 trace 的结构校验用 `python3` + `json`，可视化只能人工把 `trace.json` 拖进 ui.perfetto.dev。
 
 ## 还没定、但已经给了默认值的两处
 

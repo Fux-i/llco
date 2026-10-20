@@ -39,6 +39,11 @@ target_include_directories(llco INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(llco INTERFACE cxx_std_23)
 target_link_libraries(llco INTERFACE atomic_queue::atomic_queue)
 
+option(LLCO_TRACE "Emit Chrome Trace slices from the engine" OFF)
+if(LLCO_TRACE)
+    target_compile_definitions(llco INTERFACE LLCO_TRACE=1)
+endif()
+
 # One executable per tests/*.cpp. CONFIGURE_DEPENDS re-globs at build time, so
 # a new test file needs no CMake edit.
 file(GLOB LLCO_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")

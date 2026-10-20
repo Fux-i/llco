@@ -1,0 +1,127 @@
+#include <gtest/gtest.h>
+#include <llco/config.hpp>
+#include <llco/trace.decl.hpp>
+
+#include <cstdio>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <vector>
+
+using namespace llco;
+
+namespace {
+
+constexpr auto TRACE_PATH = "trace_test.json";
+
+auto slurp(const char *path) -> std::string {
+    std::ifstream      in{path};
+    std::ostringstream text;
+    text << in.rdbuf();
+    return text.str();
+}
+
+auto count_of(const std::string &text, std::string_view needle) -> std::size_t {
+    std::size_t count = 0;
+    for (auto pos = text.find(needle); pos != std::string::npos; pos = text.find(needle, pos + 1))
+        ++count;
+    return count;
+}
+
+// every "ts":<int> in file order
+auto timestamps(const std::string &text) -> std::vector<long long> {
+    std::vector<long long> out;
+    constexpr auto         key = std::string_view{R"("ts":)"};
+    for (auto pos = text.find(key); pos != std::string::npos; pos = text.find(key, pos + 1))
+        out.push_back(std::stoll(text.substr(pos + key.size())));
+    return out;
+}
+
+} // namespace
+
+TEST(trace, pairs_slices_and_names_lanes) {
+    trace::set_thread_name("t0");
+    {
+        const trace::scope outer{"outer"};
+        const trace::scope inner{"inner"};
+    }
+    ASSERT_TRUE(trace::flush(TRACE_PATH)) << "flush could not write the file";
+
+    const auto json = slurp(TRACE_PATH);
+    std::remove(TRACE_PATH);
+
+    ASSERT_FALSE(json.empty()) << "flush wrote nothing";
+    EXPECT_EQ(json.front(), '[') << "the file must be a JSON array";
+
+    EXPECT_EQ(count_of(json, R"("ph":"M")"), 1U)
+        << "each lane needs one thread_name metadata event";
+    EXPECT_NE(json.find(R"("name":"thread_name")"), std::string::npos);
+    EXPECT_NE(json.find(R"("name":"t0")"), std::string::npos);
+
+    EXPECT_EQ(count_of(json, R"("ph":"B")"), 2U);
+    EXPECT_EQ(count_of(json, R"("ph":"E")"), 2U);
+
+    // nesting order: outer B, inner B, inner E, outer E
+    const auto outer_b = json.find(R"("ph":"B")");
+    const auto inner_b = json.find(R"("ph":"B")", outer_b + 1);
+    const auto inner_e = json.find(R"("ph":"E")");
+    const auto outer_e = json.find(R"("ph":"E")", inner_e + 1);
+    EXPECT_LT(outer_b, inner_b);
+    EXPECT_LT(inner_b, inner_e);
+    EXPECT_LT(inner_e, outer_e);
+
+    const auto ts = timestamps(json);
+    ASSERT_EQ(ts.size(), 4U);
+    for (std::size_t i = 1; i < ts.size(); ++i)
+        EXPECT_LE(ts[i - 1], ts[i]) << "timestamps must not go backwards within a lane";
+}
+
+TEST(trace, keeps_one_lane_per_thread) {
+    trace::set_thread_name("main");
+    { const trace::scope slice{"main-slice"}; }
+
+    std::thread worker{[] {
+        trace::set_thread_name("worker");
+        const trace::scope slice{"worker-slice"};
+    }};
+    worker.join(); // its lane must survive the thread
+
+    ASSERT_TRUE(trace::flush(TRACE_PATH)) << "flush could not write the file";
+    const auto json = slurp(TRACE_PATH);
+    std::remove(TRACE_PATH);
+
+    EXPECT_EQ(count_of(json, R"("ph":"M")"), 2U) << "one metadata event per lane";
+    EXPECT_NE(json.find(R"("name":"worker")"), std::string::npos);
+    EXPECT_EQ(count_of(json, R"("ph":"B")"), 2U);
+    EXPECT_EQ(count_of(json, R"("ph":"E")"), 2U);
+}
+
+#if LLCO_TRACE
+#include <llco/engine.decl.hpp>
+#include <llco/task.hpp>
+
+namespace {
+
+task<> noop() {
+    co_return;
+}
+
+} // namespace
+
+TEST(trace, engine_emits_resume_slices) {
+    trace::set_thread_name("engine");
+    engine e;
+
+    ASSERT_TRUE(e.spawn(noop()));
+    EXPECT_EQ(e.drain(), 1U);
+    ASSERT_TRUE(trace::flush(TRACE_PATH)) << "flush could not write the file";
+
+    const auto json = slurp(TRACE_PATH);
+    std::remove(TRACE_PATH);
+
+    EXPECT_EQ(count_of(json, R"("name":"resume","ph":"B")"), 1U);
+    EXPECT_EQ(count_of(json, R"("name":"resume","ph":"E")"), 1U);
+}
+#endif

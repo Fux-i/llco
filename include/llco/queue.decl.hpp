@@ -1,5 +1,6 @@
 #pragma once
 
+#include "attr.hpp"
 #include "config.hpp"
 
 #include <atomic_queue/atomic_queue.h>
@@ -17,9 +18,9 @@ class queue {
     queue_backend<T, Cap> m_impl;
 
   public:
-    [[nodiscard]]
+    [[LLCO_DISCARD_HINT]]
     auto try_push(const T &value) noexcept -> bool;
-    [[nodiscard]]
+    [[LLCO_DISCARD_HINT]]
     auto try_pop(T &value) noexcept -> bool;
 };
 

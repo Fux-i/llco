@@ -1,5 +1,6 @@
 #pragma once
 
+#include "attr.hpp"
 #include "queue.decl.hpp"
 #include "task.hpp"
 
@@ -25,19 +26,19 @@ class engine {
     using exception_handler = promise_base::exception_handler;
 
     // false when full (ADR-0004)
-    [[nodiscard]]
+    [[LLCO_DISCARD_HINT]]
     auto try_add(handle_type handle) noexcept -> bool;
 
     // false when empty
     auto run_once() -> bool;
 
     // returns how many handles were resumed
-    [[nodiscard]]
+    [[LLCO_DISCARD_HINT]]
     auto drain() -> std::size_t;
 
     // transfers ownership; false when full (the frame is destroyed)
     template <class T>
-    [[nodiscard]]
+    [[LLCO_DISCARD_HINT]]
     auto spawn(task<T> &&t) noexcept -> bool;
 
     // replaces the handler for exceptions escaping detached tasks; it must not throw

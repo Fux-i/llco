@@ -33,6 +33,7 @@ struct promise_base {
         template <typename P>
         auto await_suspend(std::coroutine_handle<P> caller) const noexcept -> handle_type {
             auto &promise = caller.promise();
+            // detached promise must have no continuation
             if (promise.m_detached) {
                 if (promise.m_exception != nullptr)
                     (*promise.m_exception_handler)(promise.m_exception);
@@ -137,7 +138,7 @@ class task {
         return awaiter{m_handle};
     }
 
-    [[nodiscard]]
+    [[LLCO_DISCARD_HINT]]
     auto handle() const noexcept -> handle_type {
         return m_handle;
     }
@@ -145,7 +146,7 @@ class task {
         m_handle.resume();
     }
     // gives up the frame; the caller owns it from now on
-    [[nodiscard]]
+    [[LLCO_DISCARD_HINT]]
     auto release() noexcept -> handle_type {
         return std::exchange(m_handle, nullptr);
     }

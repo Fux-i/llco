@@ -128,6 +128,7 @@ include/llco/
 ## 工程约束（本机实测，2026-10）
 
 - **工具链**：clang 22.1.8 + libc++，`-std=c++23`，CMake 3.28.3 + Ninja，16 核。clang 22 不再需要 `-fcoroutines`（会报 unused 警告）。
+- **`<print>` 只有 clang 能用**：`default_exception_handler` 用 `std::println`，而本机 GCC 13.3 的 libstdc++ 没有 `<print>`，所以整棵树（包括 ASan 树）都必须用 clang 22 + libc++ 配置；`cmake` 不指定编译器时会挑到 GCC 13 并编译失败。
 - **没有 `std::execution`**：本机 libc++ 的 `<execution>` 只有并行算法，没有 P2300。
 - **gtest 本机没装**：走 `FetchContent` 固定 tag（GitHub 可达）；benchmark 自写，不引 google/benchmark。
 - **atomic_queue v1.9.4**（MIT，header-only）：

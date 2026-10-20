@@ -3,17 +3,18 @@
 #include "engine.decl.hpp"
 
 #include <cstdio>
+#include <print>
 #include <utility>
 
 namespace llco {
 
 inline void default_exception_handler(std::exception_ptr e) {
     try {
-        std::rethrow_exception(e);
+        std::rethrow_exception(std::move(e));
     } catch (const std::exception &ex) {
-        std::fprintf(stderr, "llco: unhandled exception in detached task: %s\n", ex.what());
+        std::println(stderr, "llco: unhandled exception in detached task: {}", ex.what());
     } catch (...) {
-        std::fprintf(stderr, "llco: unhandled exception in detached task\n");
+        std::println(stderr, "llco: unhandled exception in detached task");
     }
     std::terminate();
 }

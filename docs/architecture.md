@@ -33,7 +33,7 @@ flowchart TB
 
 **依赖方向是单向的**，这条规则决定模块怎么切：
 
-- `engine` 认识 queue、io_uring、trace，**不认识** scheduler。
+- `engine` 认识 queue、io_uring、trace 和 `task`（只为 `spawn`），**不认识** scheduler。
 - `scheduler` 认识 engine，**不认识** task 的内部。
 - `task` 不认识 engine；唯一需要 engine 的地方是 `co_await resume_on(e)`，它只依赖一个最小概念（见下），不依赖 engine 类型。
 - `io_uring` 只在 engine 内部使用，不泄漏到 task 层。
@@ -74,12 +74,12 @@ concept executor = requires(E& e, std::coroutine_handle<> h) {
 
 ### 3. 满载与背压
 
-队列有界。外部路径返回 false（scheduler 负责换 engine 重试）；协程内部的 `resume_on` 无处返回失败，约定"`try_push` 失败则由当前线程内联继续"（ADR-0004）。不阻塞、不丢弃、不引入无界兜底。
+队列有界。外部路径返回 false（scheduler 负责换 engine 重试）；`spawn` 转移所有权后无路可退，满载即销毁帧并返回 false，所以返回值必须检查；协程内部的 `resume_on` 无处返回失败，约定"`try_push` 失败则由当前线程内联继续"（ADR-0004）。不阻塞、不静默丢弃、不引入无界兜底。
 
 ### 4. 所有权与异常
 
 - `task` 拥有帧，析构即 `destroy()`；`release()` 显式交出句柄。
-- `spawn` 之后所有权归 engine：帧在 `final_suspend` 处自毁（promise 的 detached 位）。
+- `spawn` 之后所有权归 engine：帧在 `final_suspend` 处自毁（promise 的 detached 位）；engine 必须比它 spawn 出去的任务活得久，manual engine 销毁前先排空队列。
 - 未捕获异常存在 promise 里，由 `co_await` 处 rethrow；detached 任务的异常交给 engine 的 exception handler，默认 `std::terminate`（响亮优于静默）。
 
 ### 5. 关停顺序

@@ -83,7 +83,7 @@
 
 **目标**：engine 接管 `task` 的所有权，跑完自毁；异常不逃逸、不静默。
 
-**改动**：`task.hpp`（加 `release()`、promise 加 detached 位）、`engine.impl.hpp`（`spawn`、exception handler）、测试。
+**改动**：`task.hpp`（加 `release()`、promise 加 detached 位）、`engine.decl.hpp` + `engine.impl.hpp`（`spawn`、exception handler）、测试。
 
 **先写的失败测试**
 
@@ -95,7 +95,7 @@
 
 1. `promise_base` 加 `bool m_detached`；`final_awaiter` 里若 detached 就 `destroy()`（destroy 之后不得再碰 promise 任何成员）。
 2. `task::release()` 返回句柄并把内部句柄置空（`[[nodiscard]]`）。
-3. `engine::spawn(task<T>&&)`：release → 置 detached → `try_add`；失败按 ADR-0004。
+3. `engine::spawn(task<T>&&)`：release → 置 detached → `try_add`；满载则销毁帧并返回 false（终局，不能重试——ADR-0004）。
 4. `engine::set_exception_handler(std::function<void(std::exception_ptr)>)`，默认打印 + `std::terminate`。
 
 **完成标志**：`ctest -R spawn` 全绿；`ASAN_OPTIONS=detect_leaks=1` 下无泄漏、无二次 destroy。

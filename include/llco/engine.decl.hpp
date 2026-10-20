@@ -1,20 +1,28 @@
 #pragma once
 
 #include "queue.decl.hpp"
+#include "task.hpp"
 
 #include <coroutine>
 #include <cstddef>
+#include <exception>
+#include <functional>
 
 namespace llco {
+
+// last resort for exceptions escaping detached tasks
+inline void default_exception_handler(std::exception_ptr e);
 
 // Single-threaded context; manual mode means the caller drives it.
 template <class Q = queue<std::coroutine_handle<>>>
 class engine {
   private:
-    Q m_queue;
+    Q                                       m_queue;
+    std::function<void(std::exception_ptr)> m_exception_handler = default_exception_handler;
 
   public:
-    using handle_type = std::coroutine_handle<>;
+    using handle_type       = std::coroutine_handle<>;
+    using exception_handler = promise_base::exception_handler;
 
     // false when full (ADR-0004)
     [[nodiscard]]
@@ -26,6 +34,14 @@ class engine {
     // returns how many handles were resumed
     [[nodiscard]]
     auto drain() -> std::size_t;
+
+    // transfers ownership; false when full (the frame is destroyed)
+    template <class T>
+    [[nodiscard]]
+    auto spawn(task<T> &&t) noexcept -> bool;
+
+    // replaces the handler for exceptions escaping detached tasks; it must not throw
+    void set_exception_handler(exception_handler handler);
 };
 
 } // namespace llco

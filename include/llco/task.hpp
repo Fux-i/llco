@@ -3,8 +3,10 @@
 #include "attr.hpp"
 #include <coroutine>
 #include <exception>
+#include <functional>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 
 namespace llco {
 
@@ -12,11 +14,14 @@ template <typename T>
 class [[LLCO_AWAIT_HINT]] task;
 
 struct promise_base {
-    using handle_type = std::coroutine_handle<>;
+    using handle_type       = std::coroutine_handle<>;
+    using exception_handler = std::function<void(std::exception_ptr)>;
 
   protected:
-    handle_type        m_continuation;
-    std::exception_ptr m_exception;
+    handle_type              m_continuation;
+    std::exception_ptr       m_exception;
+    const exception_handler *m_exception_handler{};
+    bool                     m_detached{};
 
   public:
     friend struct final_awaiter;
@@ -28,6 +33,12 @@ struct promise_base {
         template <typename P>
         auto await_suspend(std::coroutine_handle<P> caller) const noexcept -> handle_type {
             auto &promise = caller.promise();
+            if (promise.m_detached) {
+                if (promise.m_exception != nullptr)
+                    (*promise.m_exception_handler)(promise.m_exception);
+                caller.destroy();
+                return std::noop_coroutine();
+            }
             if (promise.m_continuation != nullptr)
                 return promise.m_continuation;
             else
@@ -42,6 +53,12 @@ struct promise_base {
 
     void set_continuation(handle_type handle) {
         m_continuation = handle;
+    }
+
+    // hand the frame over to the engine: it self-destroys at final suspend
+    void set_detached(const exception_handler &handler) noexcept {
+        m_detached          = true;
+        m_exception_handler = &handler;
     }
 
     auto initial_suspend() -> std::suspend_always {
@@ -126,6 +143,11 @@ class task {
     }
     void resume() const {
         m_handle.resume();
+    }
+    // gives up the frame; the caller owns it from now on
+    [[nodiscard]]
+    auto release() noexcept -> handle_type {
+        return std::exchange(m_handle, nullptr);
     }
     [[LLCO_DISCARD_HINT]]
     auto result() const -> T {

@@ -2,7 +2,21 @@
 
 #include "engine.decl.hpp"
 
+#include <cstdio>
+#include <utility>
+
 namespace llco {
+
+inline void default_exception_handler(std::exception_ptr e) {
+    try {
+        std::rethrow_exception(e);
+    } catch (const std::exception &ex) {
+        std::fprintf(stderr, "llco: unhandled exception in detached task: %s\n", ex.what());
+    } catch (...) {
+        std::fprintf(stderr, "llco: unhandled exception in detached task\n");
+    }
+    std::terminate();
+}
 
 template <class Q>
 auto engine<Q>::try_add(handle_type handle) noexcept -> bool {
@@ -24,6 +38,23 @@ auto engine<Q>::drain() -> std::size_t {
     while (run_once())
         ++count;
     return count;
+}
+
+template <class Q>
+template <class T>
+auto engine<Q>::spawn(task<T> &&t) noexcept -> bool {
+    auto handle = t.release();
+    handle.promise().set_detached(m_exception_handler);
+    if (!try_add(handle)) {
+        handle.destroy();
+        return false;
+    }
+    return true;
+}
+
+template <class Q>
+void engine<Q>::set_exception_handler(exception_handler handler) {
+    m_exception_handler = std::move(handler);
 }
 
 } // namespace llco

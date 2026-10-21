@@ -77,14 +77,14 @@ inline lane::lane() {
     m_data.tid  = next_tid++;
     m_data.name = "thread-" + std::to_string(m_data.tid);
 
-    auto                 &reg = registry_ref();
-    const std::lock_guard lock{reg.mutex};
+    auto                  &reg = registry_ref();
+    const std::scoped_lock lock{reg.mutex};
     reg.live.push_back(this);
 }
 
 inline lane::~lane() {
-    auto                 &reg = registry_ref();
-    const std::lock_guard lock{reg.mutex};
+    auto                  &reg = registry_ref();
+    const std::scoped_lock lock{reg.mutex};
     std::erase(reg.live, this);
     reg.finished.push_back(std::move(m_data));
 }
@@ -148,7 +148,7 @@ inline auto flush(std::string_view path) -> bool {
     auto       &reg  = detail::registry_ref();
     std::string json = "[\n";
     {
-        const std::lock_guard lock{reg.mutex};
+        const std::scoped_lock lock{reg.mutex};
         for (auto *lane : reg.live) {
             lane->append_json(json);
             lane->clear();
@@ -166,7 +166,8 @@ inline auto flush(std::string_view path) -> bool {
     if (file == nullptr)
         return false;
     const auto written = std::fwrite(json.data(), 1, json.size(), file);
-    return written == json.size() && std::fclose(file) == 0;
+    const bool closed  = std::fclose(file) == 0;
+    return written == json.size() && closed;
 }
 
 } // namespace llco::trace

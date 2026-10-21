@@ -50,6 +50,7 @@ endif()
 # One executable per tests/*.cpp. CONFIGURE_DEPENDS re-globs at build time, so
 # a new test file needs no CMake edit.
 file(GLOB LLCO_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")
+set(LLCO_LINT_SOURCES ${LLCO_TEST_SOURCES})
 foreach(source IN LISTS LLCO_TEST_SOURCES)
     get_filename_component(name "${source}" NAME_WE)
     add_executable(${name} "${source}")
@@ -64,5 +65,17 @@ foreach(subdir examples bench)
         get_filename_component(name "${source}" NAME_WE)
         add_executable(${name} "${source}")
         target_link_libraries(${name} PRIVATE llco)
+        list(APPEND LLCO_LINT_SOURCES ${source})
     endforeach()
 endforeach()
+# clang-tidy over every TU; needs >= 21 for modernize-use-scoped-lock.
+# [a-z]*/ keeps build/_deps (third-party) out of the header filter.
+find_program(LLCO_CLANG_TIDY NAMES clang-tidy-22 clang-tidy-21 clang-tidy
+             HINTS $ENV{HOME}/.local/bin)
+if(LLCO_CLANG_TIDY)
+    add_custom_target(lint
+        COMMAND ${LLCO_CLANG_TIDY} -p ${CMAKE_BINARY_DIR} ${LLCO_LINT_SOURCES}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMAND_EXPAND_LISTS
+        USES_TERMINAL)
+endif()

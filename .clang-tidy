@@ -1,9 +1,29 @@
 ---
+# Check set. Explanations for the disables live up here, because a YAML comment
+# inside the folded scalar below would become part of the glob list.
+#
+# Disabled on purpose (project decisions, not laziness):
+#   misc-include-cleaner          examples include the umbrella; tests keep precise includes
+#   misc-header-include-cycle     *.decl.hpp includes its *.impl.hpp at the end (architecture rule 1)
+#   *-non-private-member-variables-in-classes  awaiters and test probes are aggregates
+#   cppcoreguidelines-special-member-functions rule of five comes from our CLASS_* macros
+#   cppcoreguidelines-avoid-non-const-global-variables  test fixtures share a log across frames
+#   portability-avoid-pragma-once every header is #pragma once by convention
+#   cppcoreguidelines-macro-usage CLASS_* needs token pasting; LLCO_TRACE must stay a macro
+#   cppcoreguidelines-owning-memory       no MS GSL in this project, plain new/fopen
+#   cppcoreguidelines-avoid-const-or-ref-data-members  awaiters hold references on purpose
+#   cppcoreguidelines-rvalue-reference-param-not-moved task is non-movable; spawn() releases it
+#   cppcoreguidelines-pro-bounds-avoid-unchecked-container-access  unchecked access is the point
 Checks: >
   -*,
   bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  cppcoreguidelines-*,
+  misc-*,
   modernize-*,
   performance-*,
+  portability-*,
   readability-*,
   -modernize-use-trailing-return-type,
   -readability-magic-numbers,
@@ -20,10 +40,24 @@ Checks: >
   -bugprone-macro-parentheses,
   -bugprone-narrowing-conversions,
   -modernize-use-nodiscard,
+  -misc-include-cleaner,
+  -misc-header-include-cycle,
+  -misc-non-private-member-variables-in-classes,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -cppcoreguidelines-special-member-functions,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -portability-avoid-pragma-once,
+  -cppcoreguidelines-macro-usage,
+  -cppcoreguidelines-owning-memory,
+  -cppcoreguidelines-avoid-const-or-ref-data-members,
+  -cppcoreguidelines-rvalue-reference-param-not-moved,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
 
 WarningsAsErrors: ""
 
-HeaderFilterRegex: "(include|tests)/.*"
+# Matches "include/..." from the editor and "/abs/path/llco/include/..." from the
+# CLI, and never build/_deps. Values here win over -header-filter on the command line.
+HeaderFilterRegex: "^(/.*/llco/|llco/)?(include|tests|examples|bench)/"
 
 CheckOptions:
   # Naming conventions matching project style
@@ -55,3 +89,6 @@ CheckOptions:
     value: lower_case
   - key: readability-identifier-naming.NamespaceCase
     value: lower_case
+  # gtest macros inflate every TestBody; keep the check useful for real functions
+  - key: readability-function-cognitive-complexity.Threshold
+    value: 40

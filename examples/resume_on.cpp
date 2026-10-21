@@ -5,12 +5,12 @@ using namespace llco;
 
 namespace {
 
-task<> hopper(engine &target, int &steps) {
+task<> hopper(engine *target, int *steps) {
     std::cout << "  [body] before the hop\n";
-    steps = 1;
-    co_await resume_on(target);
+    *steps = 1;
+    co_await resume_on(*target);
     std::cout << "  [body] after the hop\n";
-    steps = 2;
+    *steps = 2;
 }
 
 } // namespace
@@ -19,7 +19,7 @@ int main() {
     engine e;
     int    steps = 0;
 
-    const bool queued = e.spawn(hopper(e, steps));
+    const bool queued = e.spawn(hopper(&e, &steps));
     std::cout << "[main] spawn -> " << queued << '\n';
 
     const bool started = e.run_once();

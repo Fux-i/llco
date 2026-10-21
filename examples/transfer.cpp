@@ -3,6 +3,8 @@
 
 using namespace llco;
 
+namespace {
+
 task<int> leaf(int value) {
     std::cout << "[leaf]   start, value = " << value << '\n';
     co_return value * 2;
@@ -41,6 +43,8 @@ task<> run() {
     std::cout << "[run] end\n";
     co_return;
 }
+
+} // namespace
 
 int main() {
     auto t = top();

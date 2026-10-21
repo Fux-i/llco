@@ -2,6 +2,7 @@
 #include <llco/config.hpp>
 #include <llco/trace.decl.hpp>
 
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -17,8 +18,8 @@ namespace {
 constexpr auto TRACE_PATH = "trace_test.json";
 
 auto slurp(const char *path) -> std::string {
-    std::ifstream      in{path};
-    std::ostringstream text;
+    const std::ifstream in{path};
+    std::ostringstream  text;
     text << in.rdbuf();
     return text.str();
 }
@@ -50,7 +51,7 @@ TEST(trace, pairs_slices_and_names_lanes) {
     ASSERT_TRUE(trace::flush(TRACE_PATH)) << "flush could not write the file";
 
     const auto json = slurp(TRACE_PATH);
-    std::remove(TRACE_PATH);
+    EXPECT_EQ(std::remove(TRACE_PATH), 0);
 
     ASSERT_FALSE(json.empty()) << "flush wrote nothing";
     EXPECT_EQ(json.front(), '[') << "the file must be a JSON array";
@@ -74,8 +75,7 @@ TEST(trace, pairs_slices_and_names_lanes) {
 
     const auto ts = timestamps(json);
     ASSERT_EQ(ts.size(), 4U);
-    for (std::size_t i = 1; i < ts.size(); ++i)
-        EXPECT_LE(ts[i - 1], ts[i]) << "timestamps must not go backwards within a lane";
+    EXPECT_TRUE(std::ranges::is_sorted(ts)) << "timestamps must not go backwards within a lane";
 }
 
 TEST(trace, keeps_one_lane_per_thread) {
@@ -90,7 +90,7 @@ TEST(trace, keeps_one_lane_per_thread) {
 
     ASSERT_TRUE(trace::flush(TRACE_PATH)) << "flush could not write the file";
     const auto json = slurp(TRACE_PATH);
-    std::remove(TRACE_PATH);
+    EXPECT_EQ(std::remove(TRACE_PATH), 0);
 
     EXPECT_EQ(count_of(json, R"("ph":"M")"), 2U) << "one metadata event per lane";
     EXPECT_NE(json.find(R"("name":"worker")"), std::string::npos);

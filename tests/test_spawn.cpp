@@ -12,6 +12,9 @@ using namespace llco;
 
 namespace {
 
+// thrown by fail_raw; the test matches on the raw value
+constexpr auto RAW_CODE = 42;
+
 // lives in the coroutine frame; sets the flag when the frame is destroyed
 struct probe {
     bool *flag;
@@ -52,7 +55,9 @@ task<> parent() {
 }
 
 task<> fail_raw() {
-    throw 42;
+    // the point of this test is a non-std exception
+    // NOLINTNEXTLINE(cert-err09-cpp, cert-err61-cpp, misc-throw-by-value-catch-by-reference)
+    throw RAW_CODE;
     co_return;
 }
 
@@ -98,7 +103,7 @@ TEST(spawn, value_task_destroys_frame) {
 TEST(spawn, exception_goes_to_handler) {
     std::exception_ptr caught;
     engine             e;
-    e.set_exception_handler([&caught](std::exception_ptr ep) { caught = ep; });
+    e.set_exception_handler([&caught](const std::exception_ptr &ep) { caught = ep; });
 
     EXPECT_TRUE(e.spawn(fail()));
     EXPECT_EQ(e.drain(), 1U);
@@ -110,7 +115,7 @@ TEST(spawn, exception_goes_to_handler) {
 TEST(spawn, child_exception_goes_to_handler) {
     std::exception_ptr caught;
     engine             e;
-    e.set_exception_handler([&caught](std::exception_ptr ep) { caught = ep; });
+    e.set_exception_handler([&caught](const std::exception_ptr &ep) { caught = ep; });
 
     EXPECT_TRUE(e.spawn(parent()));
     EXPECT_EQ(e.drain(), 1U);
@@ -122,7 +127,7 @@ TEST(spawn, child_exception_goes_to_handler) {
 TEST(spawn, non_std_exception_goes_to_handler) {
     std::exception_ptr caught;
     engine             e;
-    e.set_exception_handler([&caught](std::exception_ptr ep) { caught = ep; });
+    e.set_exception_handler([&caught](const std::exception_ptr &ep) { caught = ep; });
 
     EXPECT_TRUE(e.spawn(fail_raw()));
     EXPECT_EQ(e.drain(), 1U);

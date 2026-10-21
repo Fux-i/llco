@@ -1,6 +1,7 @@
 #include <iostream>
 #include <llco/llco.hpp>
 #include <llco/trace.decl.hpp>
+#include <span>
 
 using namespace llco;
 
@@ -15,7 +16,8 @@ task<> work(int id) {
 } // namespace
 
 int main(int argc, char **argv) {
-    const char *path = argc > 1 ? argv[1] : "trace.json";
+    const std::span args{argv, static_cast<std::size_t>(argc)};
+    const char     *path = args.size() > 1 ? args[1] : "trace.json";
 
     trace::set_thread_name("main");
 

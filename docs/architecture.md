@@ -136,6 +136,9 @@ include/llco/
 - **四棵树由 `CMakePresets.json` 定义**，命令形态统一为 `cmake --preset <p> && cmake --build --preset <p> && ctest --preset <p>`：`default`（clang 22 + libc++，`build/`）、`asan`（`build/_asan`，ASan+UBSan，testPreset 里带 `ASAN_OPTIONS=detect_leaks=1`）、`trace`（`build/_trace`，`LLCO_TRACE=ON`）、`gcc`（g++-14，`build/_gcc`）。本地变体写进 `CMakeUserPresets.json`（已 gitignore）。
 - **所有可执行文件输出到 `build/bin`**：`CMAKE_RUNTIME_OUTPUT_DIRECTORY` 全局设置，测试/示例/bench 共用同一个目录，脚本才能只靠 target 名定位二进制。
 - **`<print>` 需要 GCC ≥ 14**：`default_exception_handler` 用 `std::println`。本机 GCC 13.3 的 libstdc++ 没有 `<print>`，clang 22 + libc++ 和 **GCC 14.2.0** 都能编（实测 g++-14 整树 16/16 通过）；裸 `cmake` 默认挑到的 `g++` 是 13，这才是"不指定编译器就编译失败"的根因。
+- **clang-tidy 必须与 clang 同主版本**：本机 `~/.local/bin/clang-tidy` 是 **22.1.8**（pip wheel 装在 `~/.local/venv-tidy`，软链进 `~/.local/bin`）。21 以下没有 `modernize-use-scoped-lock` 这类新 check，编辑器（clice 自带 22）能看见而 CLI 看不见，两边就会各说各话。入口：`cmake --build build --target lint`（CMake 里 `find_program` 依次找 `clang-tidy-22` / `clang-tidy-21` / `clang-tidy`）。
+- **tidy 规则只有一份**：全部写在 `.clang-tidy`；`.clangd` 只剩编译参数与 `deps` 抑制（clice 直接读 `.clang-tidy`，不走 `.clangd`）。`HeaderFilterRegex` 写成 `^(/.*/llco/|llco/)?(include|tests|examples|bench)/`，同时适配相对/绝对路径并排除 `build/_deps`；**命令行 `-header-filter` 会被该配置覆盖**，不要在 CMake 里再传一份。被禁用的 check 及其项目级理由列在 `.clang-tidy` 顶部。
+- **锁一律 `std::scoped_lock`**（单锁时与 `lock_guard` 生成代码相同，多锁时不必换写法）。
 - **没有 `std::execution`**：本机 libc++ 的 `<execution>` 只有并行算法，没有 P2300。
 - **gtest 本机没装**：走 `FetchContent` 固定 tag（GitHub 可达）；benchmark 自写，不引 google/benchmark。
 - **atomic_queue v1.9.4**（MIT，header-only）：

@@ -1,3 +1,5 @@
 build/
 .clangd
+CMakeUserPresets.json
+trace.json
 .vscode/launch.json

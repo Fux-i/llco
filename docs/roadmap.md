@@ -153,7 +153,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 **目标**：默认零开销的 Chrome Trace JSON 埋点，能在 Perfetto / chrome://tracing 里看到"每线程一条泳道 + 嵌套任务块"。
 
-**改动**：`include/llco/trace.decl.hpp` + `trace.impl.hpp`（`namespace llco::trace`，不是类/单例）、`engine.impl.hpp` 埋点（`#if LLCO_TRACE` 包住）、`config.hpp` 给 `LLCO_TRACE` 默认值、`CMakeLists.txt` 的 `option(LLCO_TRACE)`、`tests/test_trace.cpp`、`examples/trace.cpp`、`scripts/trace.sh`（一条命令跑完配置 → 编译 → 运行 → 校验）。
+**改动**：`include/llco/trace.decl.hpp` + `trace.impl.hpp`（`namespace llco::trace`，不是类/单例）、`engine.impl.hpp` 埋点（`#if LLCO_TRACE` 包住）、`config.hpp` 给 `LLCO_TRACE` 默认值、`CMakeLists.txt` 的 `option(LLCO_TRACE)`、`tests/test_trace.cpp`、`examples/trace.cpp`、`scripts/trace.sh`（一条命令跑完配置 → 编译 → 运行 → 校验）、`CMakePresets.json`（`default`/`asan`/`trace`/`gcc` 四棵树）、`CMakeLists.txt`（可执行文件统一输出到 `build/bin`）。
 
 **先写的失败测试**
 
@@ -167,9 +167,9 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 2. 每线程一个 `thread_local lane`（events = `{const char* name, char phase, int64 ts}`，名字必须是字面量，不拷贝字符串）；lane 构造时把自己登记进全局注册表、析构时把数据 move 进 `finished` 列表。注册表在堆上**故意 leak**：主线程的 thread_local 可能在静态析构之后才析构。
 3. `flush(path)`：加锁遍历 `live` + `finished` 拼 JSON，写完**排空**（清空 events、清空 finished），返回是否写成功。`ts` 用 `steady_clock` 微秒。
 4. engine 埋点：`run_once()` 里 `resume()` 前后各一个 `trace::scope{"resume"}`，整段包在 `#if LLCO_TRACE` 里——默认构建里 `run_once()` 一行都不多。
-5. 另开一棵 trace-on 树验证埋点：`cmake -S . -B build/_trace -DLLCO_TRACE=ON`（**必须整棵树一致**，见坑）。
+5. 另开一棵 trace-on 树验证埋点：`cmake --preset trace`（**必须整棵树一致**，见坑），由 `CMakePresets.json` 而不是命令行记住 `-DLLCO_TRACE=ON`。
 
-**完成标志**：`./scripts/trace.sh` 一条命令跑完（配置 trace-on 树 → 编译 demo → 运行 → `json.tool` 校验 → `grep '"name":"resume"'` 自检）并打印 `trace.json` 路径；默认树 `ctest` 全绿，`build/_trace` 里 17/17 通过；拖进 ui.perfetto.dev 能看到 `resume` 包住 `work` 的嵌套块。
+**完成标志**：`./scripts/trace.sh [demo]` 一条命令跑完（`cmake --preset trace` → 编译该 demo → 用 `build/_trace/traces/<demo>.json` 作为输出路径运行 → `json.tool` 校验 → 打印路径），`demo` 缺省为 `trace`；四个 preset 的 `ctest` 全绿（default 16、asan 16、trace 17、gcc 16）；拖进 ui.perfetto.dev 能看到 `resume` 包住 `work` 的嵌套块。
 
 **坑**
 

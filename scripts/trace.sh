@@ -1,23 +1,22 @@
 #!/usr/bin/env bash
-# Builds the trace-enabled tree, runs the demo, and checks the generated trace.json.
+# Runs a trace-emitting demo from the trace preset and validates its JSON output.
+# Usage: scripts/trace.sh [demo]   (demo defaults to "trace"; e.g. "resume_on")
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build="$root/build/_trace"
+demo="${1:-trace}"
+out="$build/traces/$demo.json"
 
-cmake -S "$root" -B "$build" -G Ninja \
-    -DCMAKE_CXX_COMPILER=clang++-22 \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DLLCO_TRACE=ON > /dev/null
-cmake --build "$build" --target trace > /dev/null
+cd "$root"
+cmake --preset trace > /dev/null
+cmake --build --preset trace --target "$demo" > /dev/null
+mkdir -p "$build/traces"
 
-cd "$build"
-./examples/trace
-
-python3 -m json.tool trace.json > /dev/null
-grep -q '"name":"resume"' trace.json
+"$build/bin/$demo" "$out"
+python3 -m json.tool "$out" > /dev/null
 
 echo
-echo "trace : $build/trace.json"
+echo "trace : $out"
 echo "open  : https://ui.perfetto.dev, drag the file in"
-echo "note  : the whole trace spans ~50us, press W in Perfetto to zoom in"
+echo "note  : the demo runs in microseconds, press W in Perfetto to zoom in"

@@ -14,7 +14,9 @@ task<> work(int id) {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+    const char *path = argc > 1 ? argv[1] : "trace.json";
+
     trace::set_thread_name("main");
 
     engine e;
@@ -27,7 +29,7 @@ int main() {
     const auto drained = e.drain();
     std::cout << "[main] drain() -> " << drained << " handle(s)\n";
 
-    const bool written = trace::flush("trace.json");
-    std::cout << "[main] trace.json written: " << written << '\n';
+    const bool written = trace::flush(path);
+    std::cout << "[main] wrote " << path << ": " << written << '\n';
     std::cout << "[main] engine slices follow LLCO_TRACE (this build: " << LLCO_TRACE << ")\n";
 }

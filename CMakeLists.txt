@@ -6,6 +6,9 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Every executable lands in build/bin, so targets are addressable by name alone.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-stdlib=libc++)
     add_link_options(-stdlib=libc++)
@@ -54,14 +57,12 @@ foreach(source IN LISTS LLCO_TEST_SOURCES)
     gtest_discover_tests(${name})
 endforeach()
 
-# Same for examples and benches; outputs live under build/examples
+# Same for examples and benches; both land in build/bin.
 foreach(subdir examples bench)
     file(GLOB LLCO_SUBDIR_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${subdir}/*.cpp")
     foreach(source IN LISTS LLCO_SUBDIR_SOURCES)
         get_filename_component(name "${source}" NAME_WE)
         add_executable(${name} "${source}")
         target_link_libraries(${name} PRIVATE llco)
-        set_target_properties(${name} PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/${subdir}")
     endforeach()
 endforeach()

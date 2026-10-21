@@ -1,0 +1,59 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "common",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "clang-base",
+      "hidden": true,
+      "inherits": "common",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": { "CMAKE_CXX_COMPILER": "clang++-22" }
+    },
+    {
+      "name": "gcc-base",
+      "hidden": true,
+      "inherits": "common",
+      "binaryDir": "${sourceDir}/build/_gcc",
+      "cacheVariables": { "CMAKE_CXX_COMPILER": "g++-14" }
+    },
+    { "name": "default", "inherits": "clang-base" },
+    {
+      "name": "asan",
+      "inherits": "clang-base",
+      "binaryDir": "${sourceDir}/build/_asan",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer -g"
+      }
+    },
+    {
+      "name": "trace",
+      "inherits": "clang-base",
+      "binaryDir": "${sourceDir}/build/_trace",
+      "cacheVariables": { "LLCO_TRACE": "ON" }
+    },
+    { "name": "gcc", "inherits": "gcc-base" }
+  ],
+  "buildPresets": [
+    { "name": "default", "configurePreset": "default" },
+    { "name": "asan", "configurePreset": "asan" },
+    { "name": "trace", "configurePreset": "trace" },
+    { "name": "gcc", "configurePreset": "gcc" }
+  ],
+  "testPresets": [
+    { "name": "default", "configurePreset": "default", "output": { "outputOnFailure": true } },
+    {
+      "name": "asan",
+      "configurePreset": "asan",
+      "environment": { "ASAN_OPTIONS": "detect_leaks=1" },
+      "output": { "outputOnFailure": true }
+    },
+    { "name": "trace", "configurePreset": "trace", "output": { "outputOnFailure": true } },
+    { "name": "gcc", "configurePreset": "gcc", "output": { "outputOnFailure": true } }
+  ]
+}

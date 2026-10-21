@@ -55,7 +55,7 @@ foreach(source IN LISTS LLCO_TEST_SOURCES)
     get_filename_component(name "${source}" NAME_WE)
     add_executable(${name} "${source}")
     target_link_libraries(${name} PRIVATE llco GTest::gtest_main)
-    gtest_discover_tests(${name})
+    gtest_discover_tests(${name} PROPERTIES TIMEOUT 30)
 endforeach()
 
 # Same for examples and benches; both land in build/bin.

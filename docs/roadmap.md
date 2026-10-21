@@ -184,25 +184,35 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 **目标**：engine 拥有一个 `std::jthread`，空闲时阻塞在 `read(eventfd)` 上（此时还没有 ring）；`sync_wait` 让调用线程等到结果。
 
-**改动**：`engine.decl.hpp` / `engine.impl.hpp`（线程、`start`/`stop`、循环）、`sync_wait.decl.hpp` + `sync_wait.impl.hpp`、测试。
+**改动**：`engine.decl.hpp` / `engine.impl.hpp`（`start`/`stop`、循环、eventfd）、`task.hpp`（promise 的 completion 钩子）、`sync_wait.decl.hpp` + `sync_wait.impl.hpp`、`tests/test_threaded_engine.cpp`、`tests/test_sync_wait.cpp`、`examples/threaded_engine.cpp`、`CMakeLists.txt`（测试 30s 超时）。
 
 **先写的失败测试**
 
-- `engine.thread_runs_added_tasks`
-- `engine.idle_thread_does_not_spin`（空闲 100ms 内循环迭代次数 == 1）
-- `engine.stop_wakes_idle_thread`（stop 之后 join 在毫秒级返回）
-- `sync_wait.returns_value_and_propagates_exception`
+- `threaded_engine.runs_added_tasks`（100 个任务全部跑完）
+- `threaded_engine.idle_does_not_spin`（空闲 100ms 后 `loop_count() == 2`）
+- `threaded_engine.stop_wakes_idle_thread`（`stop()` 在 50ms 内返回）
+- `threaded_engine.destructor_drains_queued_tasks`（析构 = stop = 跑完已入队的任务）
+- `sync_wait.returns_value`、`sync_wait.propagates_exception`
+- `sync_wait.waits_for_cross_thread_hop`（任务里 `co_await resume_on(e)`，sync_wait 必须等到 engine 线程跑完才返回）
 
 **实现顺序**
 
-1. engine 持有一个 eventfd；`notify()` 写 8 字节，`wait()` `read` 并排空。
-2. 循环：`while (!stop_requested()) { drain_queue(); wait(); }`；`std::stop_callback` 里写一次 eventfd。
-3. `start()` / `stop()`（`request_stop` + `join`）；析构 = stop。
-4. `sync_wait(task<T>&&)`：`std::binary_semaphore` + 结果槽；root promise 在 `final_suspend` 里 set。
+1. `engine` 增 `std::jthread m_thread`、`std::atomic<int> m_event_fd`（初值 -1）、`std::size_t m_loops`；`start()` 里 `eventfd(0, EFD_CLOEXEC)` 失败抛 `std::system_error`，然后起线程。没调 `start()` 的引擎仍然是 manual 的。
+2. 循环：`std::stop_callback` 里只写一次门铃；主体是 `for (;;) { ++m_loops; drain(); if (stop_requested()) return; wait(); }`。`wait()` 阻塞读 8 字节、`-EINTR` 重试；`notify()` 写 8 字节，失败视为"循环已经醒着"。
+3. `try_add` `push` 成功后 `notify()`（M7 再优化成"只在睡着时敲门"）。
+4. `stop()`：`joinable()` 时 `request_stop` + `join`，**然后由调用线程再 `drain()` 一次**，兜住"循环在 stop 之前已经越过 drain、之后还有 push"的竞争窗口；最后 close fd。`~engine` = `stop()`。
+5. `sync_wait`：`promise_base` 加 `std::binary_semaphore *m_completion`，`final_awaiter::await_suspend` 里**先** `release()` 再处理 continuation/detached；`sync_wait` 在调用线程内联 `resume()` 启动 root，然后阻塞在 semaphore 上，任务中途 `resume_on` 到别的线程也能被唤醒。
 
-**完成标志**：demo 起 4 个 engine、提交 1000 个任务全部完成；空闲时 `top` 里 CPU ≈ 0。
+**完成标志**：`examples/threaded_engine` 起 4 个 engine、1000 个任务全部完成（实测 ~14ms），空闲 200ms 的进程 CPU 时间 ≈ 0（实测 0 ms）；`sync_wait` 跨引擎拿到 7。
 
-**坑**：read 之后要循环排空队列再决定是否回去 wait（否则丢唤醒）；`stop_callback` 里只能做很小的动作；`sync_wait` 的阻塞是调用线程的事，与 engine 的 blocking point 无关。
+**坑**
+
+- **`~engine` 里不能执行任务**：异常处理函数指针指向 `*this`，那时已经在析构。所以排空必须发生在 `stop()`，对象还活着的时候。
+- **`stop()` 之后再提交 = 永久滞留**：fd 已关，没人再唤醒循环。约定"stop 之后不得再提交"。
+- manual 引擎（没 `start()`）销毁时队列里未跑的 spawned 帧仍然泄漏——M2 的遗留问题，留到 M8 的 scheduler 关停路径统一解决。
+- `std::thread::join()` 对非 joinable 线程会抛 `system_error`，所以 `stop()` 必须用 `joinable()` 守卫，不能只靠 `request_stop()` 的宽松语义（第一次实现就踩了）。
+- 阻塞原语让测试有可能挂死：`gtest_discover_tests(... PROPERTIES TIMEOUT 30)`。
+- `persistent` 细节：`stop_callback` 在循环体第一行构造，若 `start()` 后立刻 `stop()`，标准保证回调在注册时立即执行一次，所以不会丢唤醒。
 
 ---
 

@@ -5,6 +5,7 @@
 #include <exception>
 #include <functional>
 #include <optional>
+#include <semaphore>
 #include <stdexcept>
 #include <utility>
 
@@ -21,6 +22,7 @@ struct promise_base {
     handle_type              m_continuation;
     std::exception_ptr       m_exception;
     const exception_handler *m_exception_handler{};
+    std::binary_semaphore   *m_completion{};
     bool                     m_detached{};
 
   public:
@@ -33,6 +35,9 @@ struct promise_base {
         template <typename P>
         auto await_suspend(std::coroutine_handle<P> caller) const noexcept -> handle_type {
             auto &promise = caller.promise();
+            // wake a blocked sync_wait before the frame can be destroyed
+            if (promise.m_completion != nullptr)
+                promise.m_completion->release();
             // detached promise must have no continuation
             if (promise.m_detached) {
                 if (promise.m_exception != nullptr)
@@ -54,6 +59,11 @@ struct promise_base {
 
     void set_continuation(handle_type handle) {
         m_continuation = handle;
+    }
+
+    // wakes the thread blocked in sync_wait when the task finishes
+    void set_completion(std::binary_semaphore &done) noexcept {
+        m_completion = &done;
     }
 
     // hand the frame over to the engine: it self-destroys at final suspend

@@ -52,6 +52,7 @@ concept Executor = requires(E& e, std::coroutine_handle<> h) {
 概念名用 CamelCase（`.clang-tidy` 的 `ConceptCase`），刻意和 lower_case 的具体类区分开。
 - **handle 是唯一的通货**：队列里只放 `std::coroutine_handle<>`（8 字节、可平凡拷贝）。awaiter 不放队列——它活在协程帧里，寿命与队列不一致。
 - **父协程**：一个协程结束后把控制权交回去的那个协程，也就是 `co_await` 它的那个协程。顶层任务没有父协程，控制权交回 `noop_coroutine`。
+- **`sync_wait` 是调用线程的阻塞点**：`promise_base` 存一个 `std::binary_semaphore *`，`final_awaiter::await_suspend` 里**先** `release()` 再处理 continuation / detached（否则帧可能先被销毁）；`sync_wait` 在调用线程上 `resume()` 启动 root，然后阻塞在 semaphore 上，所以任务中途 `resume_on` 到别的 engine 也能被正确唤醒。这与 engine 自己的 eventfd 阻塞点无关。
 - **trace 是环境级的**：`llco::trace` 是命名空间而非对象（不做单例）；`trace::scope` 构造发 `B`、析构发 `E`，RAII 保证配对；每线程一条泳道（`thread_local` 缓冲 + 全局注册表，线程退出时搬进 `finished`），`trace::flush(path)` 写出 Chromium JSON 并排空。引擎埋点受 `LLCO_TRACE` 编译期开关控制，默认 0 时 `run_once()` 一行都不多。
 
 ## 一次任务的生命周期
@@ -72,7 +73,7 @@ concept Executor = requires(E& e, std::coroutine_handle<> h) {
 
 ### 2. 阻塞点：每 engine 一个 ring + 一个共享 eventfd
 
-每个 engine 在 `start()` 时建一个 io_uring 实例（不重复构造，只由本线程使用），用 `io_uring_register_eventfd` 的 `_ASYNC` 变体把该 engine 的 eventfd 绑进 ring。engine 线程在"没有任务、也没有完成事件"时阻塞在 `read(eventfd)`：内核在 CQE 完成时写这个 fd，任何线程投递任务后也写同一个 fd——**完成通知和门铃共用一个阻塞点**，不需要 epoll（ADR-0003）。醒来后先排空任务队列、再排空 CQ ring，两处都空才回去阻塞。
+M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `read(eventfd)` 上，`try_add` / `spawn` 成功后写这个 fd 把线程叫醒。M6 再把 ring 接进来：每个 engine 建一个 io_uring 实例（不重复构造，只由本线程使用），用 `io_uring_register_eventfd` 的 `_ASYNC` 变体把该 engine 的 eventfd 绑进 ring，于是**完成通知和门铃共用一个阻塞点**，不需要 epoll（ADR-0003）。醒来后先排空任务队列、再排空 CQ ring，两处都空才回去阻塞。
 
 **门铃优化**是单独一步：`atomic<bool> sleeping` + "先置位、再复查队列"的 double check，写反就是漏唤醒。
 
@@ -88,7 +89,7 @@ concept Executor = requires(E& e, std::coroutine_handle<> h) {
 
 ### 5. 关停顺序
 
-`request_stop()` → stop_callback 写门铃 → 线程醒来 → 排空队列与 CQ → 退出循环 → `join()` → 释放 ring。析构 = `request_stop()` + `join()`，不 detach 线程、不静默丢任务。
+`request_stop()` → stop_callback 写门铃 → 线程醒来 → 排空队列 → 退出循环 → `join()` → **调用线程再 `drain()` 一次** → close fd。最后那次 drain 不是冗余：循环可能在 stop 之前就越过了 drain，而之后又有 push 入队，只有停止方自己再排空一次才能保证"stop 返回时已入队的任务都跑过"。析构 = `stop()`，所以 `~engine` 里不会再执行任务（那时异常处理函数指针已经指向正在析构的对象）。
 
 ## 文件布局约定
 
@@ -150,6 +151,7 @@ include/llco/
 - **io_uring / eventfd**：liburing 头 2.10 / 运行库 `.so.2` = 2.5（可用；链接时 `-luring` 放源文件之后）；`ulimit -l` = 64MB → 约 7954 个 64-entry ring，够用。
   - 实测：`read(eventfd)` 既能被内核的完成通知唤醒，也能被其它线程的 `write` 唤醒；一次通知可能对应多个完成；醒来时也可能什么都没有。
   - `io_uring_wait_cqe` 返回 `-EINTR` 且不重试——这也是不用它做阻塞点的原因之一（ADR-0003）。
+- **测试统一 30s 超时**：`gtest_discover_tests(... PROPERTIES TIMEOUT 30)`。M5 起有阻塞原语，实现写错会让用例挂死而不是失败，超时至少能让 ctest 报出来。
 - **可视化**：本机 `perf` 无法录 sched tracepoint（tracefs 只读、`perf_event_paranoid=2`、无 sudo），统一走 **Chrome Trace JSON + Perfetto**。本机**没有** `trace_processor`（也没有 `perfetto` Python 模块），所以 trace 的结构校验用 `python3` + `json`，可视化只能人工把 `trace.json` 拖进 ui.perfetto.dev。
 
 ## 还没定、但已经给了默认值的两处

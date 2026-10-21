@@ -153,7 +153,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 **目标**：默认零开销的 Chrome Trace JSON 埋点，能在 Perfetto / chrome://tracing 里看到"每线程一条泳道 + 嵌套任务块"。
 
-**改动**：`include/llco/trace.decl.hpp` + `trace.impl.hpp`（`namespace llco::trace`，不是类/单例）、`engine.impl.hpp` 埋点（`#if LLCO_TRACE` 包住）、`config.hpp` 给 `LLCO_TRACE` 默认值、`CMakeLists.txt` 的 `option(LLCO_TRACE)`、`tests/test_trace.cpp`、`examples/trace.cpp`。
+**改动**：`include/llco/trace.decl.hpp` + `trace.impl.hpp`（`namespace llco::trace`，不是类/单例）、`engine.impl.hpp` 埋点（`#if LLCO_TRACE` 包住）、`config.hpp` 给 `LLCO_TRACE` 默认值、`CMakeLists.txt` 的 `option(LLCO_TRACE)`、`tests/test_trace.cpp`、`examples/trace.cpp`、`scripts/trace.sh`（一条命令跑完配置 → 编译 → 运行 → 校验）。
 
 **先写的失败测试**
 
@@ -169,7 +169,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 4. engine 埋点：`run_once()` 里 `resume()` 前后各一个 `trace::scope{"resume"}`，整段包在 `#if LLCO_TRACE` 里——默认构建里 `run_once()` 一行都不多。
 5. 另开一棵 trace-on 树验证埋点：`cmake -S . -B build/_trace -DLLCO_TRACE=ON`（**必须整棵树一致**，见坑）。
 
-**完成标志**：默认树 `ctest` 全绿；`build/_trace` 里 17/17 通过，`./build/_trace/examples/trace` 生成的 `trace.json` 能被 `python3 -m json.tool` 解析，且能看到 `resume` 包住 `work` 的嵌套块。
+**完成标志**：`./scripts/trace.sh` 一条命令跑完（配置 trace-on 树 → 编译 demo → 运行 → `json.tool` 校验 → `grep '"name":"resume"'` 自检）并打印 `trace.json` 路径；默认树 `ctest` 全绿，`build/_trace` 里 17/17 通过；拖进 ui.perfetto.dev 能看到 `resume` 包住 `work` 的嵌套块。
 
 **坑**
 

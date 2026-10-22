@@ -7,5 +7,6 @@
 #include "executor.decl.hpp"
 #include "queue.decl.hpp"
 #include "resume_on.hpp"
+#include "scheduler.decl.hpp"
 #include "sync_wait.decl.hpp"
 #include "task.hpp"

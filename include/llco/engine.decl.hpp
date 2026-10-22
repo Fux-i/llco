@@ -76,6 +76,11 @@ class engine {
     [[LLCO_DISCARD_HINT]]
     auto spawn(task<T> &&t) noexcept -> bool;
 
+    // hands a released frame over; false leaves ownership with the caller (unlike spawn)
+    template <class P>
+    [[LLCO_DISCARD_HINT]]
+    auto try_adopt(std::coroutine_handle<P> handle) noexcept -> bool;
+
     // replaces the handler for exceptions escaping detached tasks; it must not throw
     void set_exception_handler(exception_handler handler);
 };

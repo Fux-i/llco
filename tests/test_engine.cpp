@@ -59,6 +59,32 @@ TEST(engine, add_fails_when_full) {
         frame.destroy();
 }
 
+TEST(engine, try_adopt_keeps_the_frame_when_full) {
+    engine e;
+
+    std::vector<std::coroutine_handle<>> frames; // the test owns the frames
+    frames.reserve(QUEUE_CAPACITY);
+    for (unsigned i = 0; i < QUEUE_CAPACITY; ++i) {
+        frames.push_back(noop().release());
+        ASSERT_TRUE(e.try_add(frames.back()));
+    }
+
+    auto extra = noop().release();
+    EXPECT_FALSE(e.try_adopt(extra)) << "a full queue must not take the frame over";
+    extra.destroy(); // still ours to destroy: no leak, no double free
+
+    EXPECT_EQ(e.drain(), QUEUE_CAPACITY);
+    for (auto frame : frames)
+        frame.destroy();
+}
+
+TEST(engine, try_adopt_takes_ownership) {
+    engine e;
+
+    ASSERT_TRUE(e.try_adopt(noop().release())) << "an idle engine must take the frame over";
+    EXPECT_EQ(e.drain(), 1U) << "a detached frame destroys itself at final suspend";
+}
+
 TEST(engine, load_tracks_queued_handles) {
     engine e;
     EXPECT_EQ(e.load(), 0U) << "a fresh engine holds no queued work";

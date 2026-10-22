@@ -138,15 +138,19 @@ inline auto engine::drain() -> std::size_t {
     return count;
 }
 
+template <class P>
+auto engine::try_adopt(std::coroutine_handle<P> handle) noexcept -> bool {
+    handle.promise().set_detached(m_exception_handler);
+    return try_add(handle);
+}
+
 template <class T>
 auto engine::spawn(task<T> &&t) noexcept -> bool {
     auto handle = t.release();
-    handle.promise().set_detached(m_exception_handler);
-    if (!try_add(handle)) {
-        handle.destroy();
-        return false;
-    }
-    return true;
+    if (try_adopt(handle))
+        return true;
+    handle.destroy();
+    return false;
 }
 
 inline void engine::set_exception_handler(exception_handler handler) {

@@ -75,7 +75,7 @@ concept Executor = requires(E& e, std::coroutine_handle<> h) {
 
 M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `read(eventfd)` 上，`try_add` / `spawn` 成功后写这个 fd 把线程叫醒。M6 起每个 engine 建一个 io_uring 实例（只建一次、跨 `start`/`stop` 复用、只由本线程使用），用**普通** `io_uring_register_eventfd` 把该 engine 的 eventfd 绑进 ring，于是**完成通知和门铃共用一个阻塞点**，不需要 epoll（ADR-0003）。醒来后先排空任务队列、再 `reap()` 排空 CQ ring，两处都空才回去阻塞；一个 ring 只吃一个注册，所以 `stop()` 先 unregister 再 close fd。
 
-**门铃优化**是单独一步：`atomic<bool> sleeping` + "先置位、再复查队列"的 double check，写反就是漏唤醒。
+**门铃只在 loop 真的睡着时才响**（M7）：`notify()` 里 `if (!m_sleeping.exchange(false)) return;`，loop 里先 `m_sleeping = true`、再看一眼队列与 CQ（只读，不运行任务），两处都空才 `read`——置位必须在复查之前，写反就是漏唤醒（窗口只有几条指令，压力测试未必复现）。`stop_requested()` 因此也要在置位之后再查一次，否则停机回调可能正好落在"查 stop"与"置位"之间而不敲门。内核 completion 直接写 fd、不经过这个标志，所以被完成唤醒后标志短暂仍是 true，此时到达的 push 会多敲一次门：多一次系统调用，无害。
 
 ### 3. 满载与背压
 
@@ -153,6 +153,7 @@ include/llco/
   - 一个 ring 只能注册一个 eventfd，重复注册返回 `-EBUSY`：engine 的 ring 跨 `start`/`stop` 复用，`stop()` 先 `io_uring_unregister_eventfd` 再 close。
   - 实测：`read(eventfd)` 既能被内核的完成通知唤醒，也能被其它线程的 `write` 唤醒；一次通知可能对应多个完成；醒来时也可能什么都没有。
   - `io_uring_wait_cqe` 返回 `-EINTR` 且不重试——这也是不用它做阻塞点的原因之一（ADR-0003）。
+- **门铃只在睡着时响**（`strace -c -f`，1000 个任务）：`write` 1006 → 9、`read` 1009 → 14；饱和注入 10 万次 push 只响 1 次。生产慢于消费时每次 push 都会响（~88/250），因为线程确实在睡。
 - **测试统一 30s 超时**：`gtest_discover_tests(... PROPERTIES TIMEOUT 30)`。M5 起有阻塞原语，实现写错会让用例挂死而不是失败，超时至少能让 ctest 报出来。
 - **可视化**：本机 `perf` 无法录 sched tracepoint（tracefs 只读、`perf_event_paranoid=2`、无 sudo），统一走 **Chrome Trace JSON + Perfetto**。本机**没有** `trace_processor`（也没有 `perfetto` Python 模块），所以 trace 的结构校验用 `python3` + `json`，可视化只能人工把 `trace.json` 拖进 ui.perfetto.dev。
 

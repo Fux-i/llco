@@ -36,6 +36,10 @@ class ring {
 
     void submit();
 
+    // Completions already waiting in the CQ; read-only, unlike reap().
+    [[LLCO_DISCARD_HINT]]
+    auto pending() const noexcept -> unsigned;
+
     // Hands every reported completion back to the kernel; returns how many were seen.
     auto reap() -> std::size_t;
 

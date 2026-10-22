@@ -58,5 +58,5 @@ int main() {
               << std::chrono::duration<double, std::milli>(elapsed).count() << " ms\n";
     for (unsigned i = 0; i < engine_count; ++i)
         std::cout << "[main] engine " << i << " loop iterations: " << engines[i]->loop_count()
-                  << '\n';
+                  << ", doorbells: " << engines[i]->wakeup_count() << '\n';
 }

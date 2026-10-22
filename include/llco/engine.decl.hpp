@@ -24,10 +24,12 @@ class engine {
   private:
     queue<std::coroutine_handle<>>          m_queue;
     std::function<void(std::exception_ptr)> m_exception_handler = default_exception_handler;
-    std::optional<io::ring>                 m_ring;
-    std::jthread                            m_thread;
-    std::atomic<int>                        m_event_fd{-1};
     std::size_t                             m_loops{};
+    std::atomic<std::size_t>                m_wakeups;
+    std::jthread                            m_thread;
+    std::optional<io::ring>                 m_ring;
+    std::atomic<int>                        m_event_fd{-1};
+    std::atomic<bool>                       m_sleeping{false};
 
     void notify() noexcept;
     void wait() noexcept;
@@ -44,6 +46,9 @@ class engine {
 
     // loop iterations so far; read it after stop()
     auto loop_count() const noexcept -> std::size_t;
+
+    // doorbell writes so far; read it after stop()
+    auto wakeup_count() const noexcept -> std::size_t;
 
     // created on the first start(), reused across restarts; liburing is not thread-safe, so touch
     // it from the engine thread only

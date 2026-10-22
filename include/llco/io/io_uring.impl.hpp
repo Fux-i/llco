@@ -41,6 +41,10 @@ inline void ring::submit() {
         throw std::system_error{-rc, std::system_category(), "io_uring_submit"};
 }
 
+inline auto ring::pending() const noexcept -> unsigned {
+    return ::io_uring_cq_ready(&m_ring);
+}
+
 inline auto ring::reap() -> std::size_t {
     ::io_uring_cqe *cqe  = nullptr;
     std::size_t     seen = 0;

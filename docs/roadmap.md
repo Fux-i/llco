@@ -249,19 +249,31 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 **目标**：只在线程真的睡着时才写 eventfd。
 
-**改动**：`engine.impl.hpp`（`sleeping` + double check）、测试。
+**改动**：`engine.impl.hpp`（`m_sleeping` + double check + `wakeup_count()`）、`tests/test_doorbell.cpp`、`examples/threaded_engine.cpp`（打印 doorbells）。
 
-**先写的失败测试**：`doorbell.no_lost_wakeup_under_churn`（多个生产者疯狂注入 + 一个 engine；先用可注入时序的测试把窗口固定下来，再加一个 10 万次压力版）。
+**先写的失败测试**
+
+- `doorbell.a_busy_engine_is_not_rung`（睡着时的那次 push 必须响一次；随后 50 次落在任务运行期间的 push 一次都不许响）
+- `doorbell.no_lost_wakeup_under_churn`（4 生产者 × 25000 次 push 全部跑完；门铃数 < 总数的 1%）
 
 **实现顺序**
 
-1. 生产者：push 之后 `if (sleeping.exchange(false)) write(efd, 1);`
-2. 消费者：`sleeping = true` → **再检查一次队列与 CQ** → 有货就 `sleeping = false` 继续；没货才 `read`。
-3. 计数断言：所有任务都跑了（不能少），可选地断言唤醒次数没有暴涨。
+1. 生产者：push 之后 `if (!m_sleeping.exchange(false)) return;` 再写 fd——只有真睡着才敲门。
+2. 消费者：`m_sleeping = true` → **再看一眼队列与 CQ**（只读检查，不运行任务）→ 有货就 `m_sleeping = false` 继续；没货才 `read`。
+3. `stop_requested()` 在**置位之后**还要再查一次：停机回调也走 `notify()`，若 `request_stop()` 落在"查 stop"与"置位"之间，回调看到的是未睡着、不写 fd，线程就睡死了。
+4. `wakeup_count()` 给测试与 demo 看真实门铃次数。
 
 **完成标志**：系统调用次数下降（`strace -c -f` 或自己计数）；压力测试无丢失。
 
-**坑**：这个 double check 的顺序写反就是漏唤醒——偶发、只在负载下出现。这个坑值得亲手踩一次，再用测试钉死。
+- 实测（本机，`strace -c -f ./build/bin/threaded_engine`，1000 个任务）：`write` 1006 → 9，`read` 1009 → 14。
+- 饱和注入（4 生产者 × 25000 次 push）：**1 次门铃**。不饱和时（主线程慢慢 push 250 次）仍有 ~88 次——生产慢于消费时线程确实在睡，该响就得响。
+- M5 的用例全部照旧：空闲 100ms 后 `loop_count() == 2`，`stop()` 50ms 内返回。
+
+**坑**
+
+- **顺序写反就是漏唤醒**：`m_sleeping = true` 必须在"再排空一次"**之前**。写反以后窗口只有几条指令，本机把顺序故意反转、跑 10 万次压力版**仍然通过**——压力测试抓不住它。所以顺序目前靠注释与 review 保；能测的是门铃契约（睡着才响、响了不丢）与饱和计数。要确定性钉死这个窗口，得加时序注入点（`wait()` 前跑一个测试回调）或把这段状态机抽成可单测的小类，两者都还没做，属于已知缺口。
+- **内核完成通知不经过 `m_sleeping`**：被 completion 唤醒时标志仍是 true，此刻到达的 push 会多敲一次门（多一次 `write`、多跑一圈空循环），无害，但门铃数会略高于"必须的次数"。
+- **`m_sleeping = false` 只能在 `wait()` 返回之后**：提前置 false 等于整个阻塞期都对外声称"醒着"，生产者不会再敲门——直接睡死。
 
 ---
 

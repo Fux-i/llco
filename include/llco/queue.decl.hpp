@@ -23,6 +23,9 @@ class queue {
     auto try_push(const T &value) noexcept -> bool;
     [[LLCO_DISCARD_HINT]]
     auto try_pop(T &value) noexcept -> bool;
+    // A push still in flight reports empty; its producer rings the bell afterwards.
+    [[LLCO_DISCARD_HINT]]
+    auto empty() const noexcept -> bool;
 };
 
 } // namespace llco

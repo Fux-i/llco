@@ -19,4 +19,9 @@ auto queue<T, Cap>::empty() const noexcept -> bool {
     return m_impl.was_empty();
 }
 
+template <class T, unsigned Cap>
+auto queue<T, Cap>::size() const noexcept -> unsigned {
+    return m_impl.was_size();
+}
+
 } // namespace llco

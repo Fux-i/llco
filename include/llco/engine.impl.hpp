@@ -66,6 +66,10 @@ inline auto engine::wakeup_count() const noexcept -> std::size_t {
     return m_wakeups.load(std::memory_order_relaxed);
 }
 
+inline auto engine::load() const noexcept -> unsigned {
+    return m_queue.size();
+}
+
 inline auto engine::ring() -> io::ring & {
     return *m_ring; // NOLINT(bugprone-unchecked-optional-access): start() fills it
 }

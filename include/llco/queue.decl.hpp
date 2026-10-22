@@ -26,6 +26,8 @@ class queue {
     // A push still in flight reports empty; its producer rings the bell afterwards.
     [[LLCO_DISCARD_HINT]]
     auto empty() const noexcept -> bool;
+    // Elements queued right now; like empty(), a sample rather than a precise count.
+    auto size() const noexcept -> unsigned;
 };
 
 } // namespace llco

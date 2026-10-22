@@ -59,6 +59,22 @@ TEST(engine, add_fails_when_full) {
         frame.destroy();
 }
 
+TEST(engine, load_tracks_queued_handles) {
+    engine e;
+    EXPECT_EQ(e.load(), 0U) << "a fresh engine holds no queued work";
+
+    auto first  = record(1);
+    auto second = record(2);
+    EXPECT_TRUE(e.try_add(first.handle()));
+    EXPECT_TRUE(e.try_add(second.handle()));
+    EXPECT_EQ(e.load(), 2U);
+
+    EXPECT_TRUE(e.run_once());
+    EXPECT_EQ(e.load(), 1U) << "a resumed handle is no longer queued";
+    EXPECT_EQ(e.drain(), 1U);
+    EXPECT_EQ(e.load(), 0U);
+}
+
 TEST(engine, drain_returns_count) {
     g_log.clear();
     engine e;

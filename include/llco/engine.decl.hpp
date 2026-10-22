@@ -50,6 +50,9 @@ class engine {
     // doorbell writes so far; read it after stop()
     auto wakeup_count() const noexcept -> std::size_t;
 
+    // handles queued but not yet resumed; a sample, not a precise load
+    auto load() const noexcept -> unsigned;
+
     // created on the first start(), reused across restarts; liburing is not thread-safe, so touch
     // it from the engine thread only
     auto ring() -> io::ring &;

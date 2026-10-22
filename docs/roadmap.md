@@ -218,7 +218,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 ## M6 · 接环：每 engine 一个 ring + 共享 eventfd
 
-**目标**：把 io_uring 接进 engine 的等待循环。每个 engine 建**一个** ring（不重复构造），用 `io_uring_register_eventfd_async` 把该 engine 的 eventfd 绑进 ring，使"完成事件"和"任务门铃"共用一个阻塞点；此时还不做真正的读写，只用 NOP / 超时验证唤醒。
+**目标**：把 io_uring 接进 engine 的等待循环。每个 engine 建**一个** ring（不重复构造），用普通 `io_uring_register_eventfd` 把该 engine 的 eventfd 绑进 ring（ring 只建一次，跨 `start`/`stop` 复用），使"完成事件"和"任务门铃"共用一个阻塞点；此时还不做真正的读写，只用 NOP / 超时验证唤醒。
 
 **改动**：`include/llco/io/io_uring.decl.hpp` + `io_uring.impl.hpp`、`engine.impl.hpp`（循环里加"排空 CQ"这一步）、demo。
 
@@ -231,15 +231,17 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 **实现顺序**
 
-1. `io_uring` 封装：`init` / `register_eventfd_async(efd)` / `submit(sqe)` / `peek_cqe` / `cqe_seen`；析构 `queue_exit`。
+1. `io::ring` 封装：构造即 `queue_init`；`register_eventfd(efd)` + `unregister_eventfd()`（一个 ring 只吃一个注册，重复注册 `-EBUSY`）；`sqe()` / `submit()` / `reap()`（内部 `peek_cqe` + `cqe_seen`）；`completions()` 是给测试与 demo 看的记账；析构 `queue_exit`。
 2. engine 循环改为：**排空任务队列 → 提交/排空 CQE → 两处都空才 `read(efd)`**。
-3. 提交之后立刻 peek 一次：`_ASYNC` 注册下，同步完成的 op 不会发通知。
+3. 提交之后立刻 peek 一次：普通注册下同步完成也会写 fd，但通知只是"有完成"的提示，CQ 必须自己排空。
 4. manual engine 不建 ring（测试里没有环也能跑）。
-5. 完成回调先只做"记账 + 打印"，真正的 IO 放 M11。
+5. 完成先只记账（`ring::completions()`），打印留给 demo；真正的 IO 放 M11。
 
-**完成标志**：demo 提交一个 200ms 超时，打印"提交 → 阻塞 → 200ms 后唤醒 → 收到完成"。
+**完成标志**：demo 提交一个 200ms 超时，打印"提交 → 阻塞 → 200ms 后唤醒 → 收到完成"（实测 `woke after 202 ms, completions: 1`）。
 
 **坑**：**只允许 `read(efd)` 阻塞**，全程不调 `wait_cqe`；ring 只归本线程（liburing 非线程安全）；一次通知可能对应多个完成；醒来也可能什么都没有；`read` 遇到 `-EINTR` 要重试。
+- **`_ASYNC` 变体不能用**：内核 `io_eventfd_signal()` 里的 `if (ev_fd->eventfd_async && !io_wq_current_is_worker()) goto out;` 决定它只在 io-wq worker 上下文发通知；超时（hrtimer）与管道 `read`（task work）实测一次都不唤醒，阻塞点会永久睡死（ADR-0003 已订正）。
+- **重复注册 `-EBUSY`**：`stop()` 必须先 `unregister_eventfd` 再 close fd，否则同一个 ring 第二次 `start()` 直接抛异常。
 
 ---
 

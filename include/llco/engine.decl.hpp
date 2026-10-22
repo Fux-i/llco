@@ -1,6 +1,7 @@
 #pragma once
 
 #include "attr.hpp"
+#include "io/io_uring.decl.hpp"
 #include "queue.decl.hpp"
 #include "task.hpp"
 
@@ -9,6 +10,7 @@
 #include <cstddef>
 #include <exception>
 #include <functional>
+#include <optional>
 #include <stop_token>
 #include <thread>
 
@@ -22,6 +24,7 @@ class engine {
   private:
     queue<std::coroutine_handle<>>          m_queue;
     std::function<void(std::exception_ptr)> m_exception_handler = default_exception_handler;
+    std::optional<io::ring>                 m_ring;
     std::jthread                            m_thread;
     std::atomic<int>                        m_event_fd{-1};
     std::size_t                             m_loops{};
@@ -41,6 +44,10 @@ class engine {
 
     // loop iterations so far; read it after stop()
     auto loop_count() const noexcept -> std::size_t;
+
+    // created on the first start(), reused across restarts; liburing is not thread-safe, so touch
+    // it from the engine thread only
+    auto ring() -> io::ring &;
 
     using handle_type       = std::coroutine_handle<>;
     using exception_handler = promise_base::exception_handler;

@@ -73,7 +73,7 @@ concept Executor = requires(E& e, std::coroutine_handle<> h) {
 
 ### 2. 阻塞点：每 engine 一个 ring + 一个共享 eventfd
 
-M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `read(eventfd)` 上，`try_add` / `spawn` 成功后写这个 fd 把线程叫醒。M6 再把 ring 接进来：每个 engine 建一个 io_uring 实例（不重复构造，只由本线程使用），用 `io_uring_register_eventfd` 的 `_ASYNC` 变体把该 engine 的 eventfd 绑进 ring，于是**完成通知和门铃共用一个阻塞点**，不需要 epoll（ADR-0003）。醒来后先排空任务队列、再排空 CQ ring，两处都空才回去阻塞。
+M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `read(eventfd)` 上，`try_add` / `spawn` 成功后写这个 fd 把线程叫醒。M6 起每个 engine 建一个 io_uring 实例（只建一次、跨 `start`/`stop` 复用、只由本线程使用），用**普通** `io_uring_register_eventfd` 把该 engine 的 eventfd 绑进 ring，于是**完成通知和门铃共用一个阻塞点**，不需要 epoll（ADR-0003）。醒来后先排空任务队列、再 `reap()` 排空 CQ ring，两处都空才回去阻塞；一个 ring 只吃一个注册，所以 `stop()` 先 unregister 再 close fd。
 
 **门铃优化**是单独一步：`atomic<bool> sleeping` + "先置位、再复查队列"的 double check，写反就是漏唤醒。
 
@@ -148,7 +148,9 @@ include/llco/
   - 容量是编译期模板参数，默认向上取整到 2 的幂；要精确用 `MINIMIZE_CONTENTION=false`。
   - `try_push` / `try_pop` 返回 `bool` 且 `[[nodiscard]]`；失败时 `try_push` 不消费元素、`try_pop` 不动出参；阻塞版是纯自旋，无超时/取消。
   - 本机实测：`AtomicQueue2<std::coroutine_handle<>, 8192>` 4 生产者 × 4 消费者 × 25000 句柄，无丢失、无重复。
-- **io_uring / eventfd**：liburing 头 2.10 / 运行库 `.so.2` = 2.5（可用；链接时 `-luring` 放源文件之后）；`ulimit -l` = 64MB → 约 7954 个 64-entry ring，够用。
+- **io_uring / eventfd**：liburing 头 2.10 / 运行库 `.so.2` = 2.5（可用；`-luring` 挂在 INTERFACE 库上，`ulimit -l` = 64MB → 约 7954 个 64-entry ring，够用）。
+  - **`io_uring_register_eventfd_async` 在本机完全不通知**：内核只对 io-wq worker 上下文里的完成写 fd，超时（hrtimer）与管道 read（task work）实测都唤不醒，改用普通注册；普通注册对同步完成的 op 也写 fd，所以每次 submit 后还是要 peek 一次（ADR-0003）。
+  - 一个 ring 只能注册一个 eventfd，重复注册返回 `-EBUSY`：engine 的 ring 跨 `start`/`stop` 复用，`stop()` 先 `io_uring_unregister_eventfd` 再 close。
   - 实测：`read(eventfd)` 既能被内核的完成通知唤醒，也能被其它线程的 `write` 唤醒；一次通知可能对应多个完成；醒来时也可能什么都没有。
   - `io_uring_wait_cqe` 返回 `-EINTR` 且不重试——这也是不用它做阻塞点的原因之一（ADR-0003）。
 - **测试统一 30s 超时**：`gtest_discover_tests(... PROPERTIES TIMEOUT 30)`。M5 起有阻塞原语，实现写错会让用例挂死而不是失败，超时至少能让 ctest 报出来。

@@ -36,9 +36,12 @@ inline engine::~engine() {
 }
 
 inline void engine::start() {
+    if (!m_ring)
+        m_ring.emplace();
     m_event_fd = ::eventfd(0, EFD_CLOEXEC);
     if (m_event_fd < 0)
         throw std::system_error{errno, std::system_category(), "eventfd"};
+    ring().register_eventfd(m_event_fd);
     m_thread = std::jthread{[this](const std::stop_token &token) { loop(token); }};
 }
 
@@ -49,6 +52,7 @@ inline void engine::stop() {
         (void)drain(); // the loop may stop before it sees the last pushes; run them here
     }
     if (m_event_fd >= 0) {
+        ring().unregister_eventfd(); // the ring outlives this start/stop cycle
         ::close(m_event_fd);
         m_event_fd = -1;
     }
@@ -56,6 +60,10 @@ inline void engine::stop() {
 
 inline auto engine::loop_count() const noexcept -> std::size_t {
     return m_loops;
+}
+
+inline auto engine::ring() -> io::ring & {
+    return *m_ring; // NOLINT(bugprone-unchecked-optional-access): start() fills it
 }
 
 inline void engine::notify() noexcept {
@@ -79,6 +87,7 @@ inline void engine::loop(const std::stop_token &token) {
     for (;;) {
         ++m_loops;
         (void)drain();
+        (void)ring().reap(); // peek after the work: an op that finished synchronously never rings
         if (token.stop_requested())
             return;
         wait();

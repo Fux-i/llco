@@ -40,7 +40,7 @@ add_library(llco INTERFACE)
 add_library(llco::llco ALIAS llco)
 target_include_directories(llco INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(llco INTERFACE cxx_std_23)
-target_link_libraries(llco INTERFACE atomic_queue::atomic_queue)
+target_link_libraries(llco INTERFACE atomic_queue::atomic_queue uring)
 
 option(LLCO_TRACE "Emit Chrome Trace slices from the engine" OFF)
 if(LLCO_TRACE)

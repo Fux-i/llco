@@ -279,27 +279,38 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 ## M8 · scheduler（多 engine）
 
-**目标**：N 个 engine + 放置策略 + 满载重试 + 跨 engine hop。
+**目标**：N 个 engine + 轮转放置 + 满载重试 + 跨 engine hop。
 
-**改动**：`scheduler.decl.hpp` + `scheduler.impl.hpp`、放置策略、`engine.impl.hpp`（暴露粗粒度负载计数）、测试。
+**改动**：`scheduler.decl.hpp` + `scheduler.impl.hpp`、`engine.decl/impl.hpp`（`try_adopt`、`load`、trace 泳道命名）、`queue.decl/impl.hpp`（`size`）、`tests/test_scheduler.cpp`、`examples/scheduler.cpp`、ADR-0004 订正 + ADR-0005。
 
 **先写的失败测试**
 
+- `engine.load_tracks_queued_handles`
+- `engine.try_adopt_keeps_the_frame_when_full`、`engine.try_adopt_takes_ownership`
 - `scheduler.round_robin_distributes`
 - `scheduler.retries_on_full_engine`
 - `scheduler.submit_returns_false_when_all_full`
 - `resume_on.cross_engine_hop_changes_thread`（记录 `std::this_thread::get_id()`）
+- `trace.scheduler_names_lanes`（只在 trace 树里存在）
 
 **实现顺序**
 
-1. 策略接口（runtime 多态）：`unsigned pick(std::span<engine*>)`；实现 round_robin 与 least_loaded。
-2. `scheduler(unsigned n = std::thread::hardware_concurrency())` 拥有 `std::vector<std::unique_ptr<engine>>`，构造即启动。
-3. `submit(task<T>&&)`：`pick` → `try_add` → 失败就换下一个（最多绕一圈）→ 全满返回 false。
-4. 跨 engine 续跑走 M3 的 `resume_on`；trace 里用 flow 事件表示接力。
+1. `queue::size()` 转发 `was_size()`，`engine::load()` 返回它——只给测试与 demo 观测积压，不是放置的输入。
+2. `engine::try_adopt(handle)`：接受已 `release()` 的帧，失败时**不**销毁；`spawn` 改成 `release` → `try_adopt` → 失败才 `destroy`（ADR-0004 已订正）。
+3. `scheduler(unsigned n = hardware_concurrency())`：拥有 `vector<unique_ptr<engine>>`，构造即启动（`n == 0` 夹到 1）；`submit` 从 `m_next.fetch_add(1) % n` 起沿环扫一圈，整圈都满才 `destroy()` 并返回 false。没有策略接口、没有 `least_loaded`（ADR-0005）。
+4. 跨 engine 接力走 M3 的 `resume_on`；trace 给每个 engine 的泳道命名 `engine-i`（只在 `LLCO_TRACE` 构建里存在；不做 flow 箭头，原因见 `docs/ig_/M8`）。
 
-**完成标志**：demo 打印每个任务落在哪个 engine / 哪条线程；trace 里能看到跨引擎接力。
+**完成标志**：`./build/bin/scheduler` 把 1000 个任务均分到 4 条线程，跨引擎接力前后线程 id 不同；`./scripts/trace.sh scheduler` 出的 trace 里能看到 `main` + `engine-0..3` 五条泳道与 `resume` 切片；四棵树 ctest 全绿（default 36、asan 36、trace 38、gcc 36）。
 
-**坑**：scheduler 是普通实例，不是单例（ADR-0002）；engine 数量为 1 时满载路径也要可测。
+**坑**
+
+- **全满路径必须销毁帧**：`submit` 整圈都失败时 `handle.destroy()`，漏掉就是泄漏，只有 ASan 树看得见。
+- **满载重试不能"先探测空位再 spawn"**：探测与 push 之间有窗口，而 `spawn` 失败就销毁帧，任务凭空消失；`try_adopt` 失败时所有权仍在调用方，才能换 engine 再试。
+- **测试要"钉住"引擎线程**才能确定性造出满载：忙等 `hold` 任务 + `std::atomic<unsigned> started` 计数；`sleep_for` 不保证这段时间里队列没被排空，也不保证任务已经开跑。
+- **测试别用 `std::array` + 运行时下标**：`cppcoreguidelines-pro-bounds-constant-array-index` 会报；最后改成一个共享 `started` 计数，连"每引擎一个标志"的数组都不需要。
+- **泳道命名必须是编译期分支**：默认构建里留 `set_thread_name` 调用，等于每个引擎线程照样登记一条泳道、照样产生事件，白付开销。整段包进 `#if LLCO_TRACE`，生产构建里没有成员、没有方法、循环里也没有那一行。
+- **`n == 0` 是除零 UB**：构造里夹到 1。
+- scheduler 是普通实例，不是单例（ADR-0002）；engine 数量为 1 时满载路径也要可测。
 
 ---
 

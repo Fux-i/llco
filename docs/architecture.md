@@ -11,7 +11,7 @@ llco 是一个 C++23 协程编排框架：**task** 负责"怎么写"，**engine*
 - **易懂**：每一层都能单独读懂，engine 的核心循环不超过一屏，每个模块只有一个职责。
 - **易用**：写业务的人只写 `task<T>` 和 `co_await`，不需要知道队列、线程、唤醒的存在。
 - **高性能**：默认路径不加锁、不进内核；唤醒只花一次 `eventfd` 写；队列是无锁 MPMC。
-- **可替换**：队列、放置策略、IO 后端都能换实现，且换实现不触碰上层。
+- **可替换**：队列、IO 后端都能换实现，且换实现不触碰上层；放置规则暂时写死在 scheduler 里（ADR-0005）。
 
 **非目标（明确不做）**
 
@@ -23,7 +23,7 @@ llco 是一个 C++23 协程编排框架：**task** 负责"怎么写"，**engine*
 
 ```mermaid
 flowchart TB
-  U["用户代码<br/>task&lt;T&gt; + co_await"] -->|"spawn / submit / sync_wait"| S["scheduler<br/>N 个 engine + 放置策略"]
+  U["用户代码<br/>task&lt;T&gt; + co_await"] -->|"spawn / submit / sync_wait"| S["scheduler<br/>N 个 engine + 轮转放置"]
   S -->|"try_add(handle)"| E["engine（单线程执行上下文）"]
   E --> Q["queue<br/>atomic_queue2 适配层"]
   E --> R["io_uring<br/>每 engine 一个，仅本线程使用"]
@@ -53,6 +53,7 @@ concept Executor = requires(E& e, std::coroutine_handle<> h) {
 - **handle 是唯一的通货**：队列里只放 `std::coroutine_handle<>`（8 字节、可平凡拷贝）。awaiter 不放队列——它活在协程帧里，寿命与队列不一致。
 - **父协程**：一个协程结束后把控制权交回去的那个协程，也就是 `co_await` 它的那个协程。顶层任务没有父协程，控制权交回 `noop_coroutine`。
 - **`sync_wait` 是调用线程的阻塞点**：`promise_base` 存一个 `std::binary_semaphore *`，`final_awaiter::await_suspend` 里**先** `release()` 再处理 continuation / detached（否则帧可能先被销毁）；`sync_wait` 在调用线程上 `resume()` 启动 root，然后阻塞在 semaphore 上，所以任务中途 `resume_on` 到别的 engine 也能被正确唤醒。这与 engine 自己的 eventfd 阻塞点无关。
+- **scheduler 是普通实例**（ADR-0002）：拥有 N 个 engine，构造即 `start()`，析构即 `stop()`（各自排空已入队任务）。放置只有一个规则：`m_next.fetch_add(1) % n` 挑起点，满了就沿环交给下一个还有空位的 engine，整圈都满才销毁帧并返回 false（ADR-0004 / ADR-0005）。`engine_at(i)` 是测试与 demo 的入口。
 - **trace 是环境级的**：`llco::trace` 是命名空间而非对象（不做单例）；`trace::scope` 构造发 `B`、析构发 `E`，RAII 保证配对；每线程一条泳道（`thread_local` 缓冲 + 全局注册表，线程退出时搬进 `finished`），`trace::flush(path)` 写出 Chromium JSON 并排空。引擎埋点受 `LLCO_TRACE` 编译期开关控制，默认 0 时 `run_once()` 一行都不多。
 
 ## 一次任务的生命周期
@@ -79,7 +80,7 @@ M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `r
 
 ### 3. 满载与背压
 
-队列有界。外部路径返回 false（scheduler 负责换 engine 重试）；`spawn` 转移所有权后无路可退，满载即销毁帧并返回 false，所以返回值必须检查；协程内部的 `resume_on` 无处返回失败，约定"`try_push` 失败则由当前线程内联继续"（ADR-0004）。不阻塞、不静默丢弃、不引入无界兜底。
+队列有界。外部路径返回 false（scheduler 用 `try_adopt` 拿同一个句柄换 engine 重试）；`spawn` 转移所有权后无路可退，满载即销毁帧并返回 false，所以返回值必须检查；协程内部的 `resume_on` 无处返回失败，约定"`try_push` 失败则由当前线程内联继续"（ADR-0004）。不阻塞、不静默丢弃、不引入无界兜底。
 
 ### 4. 所有权与异常
 
@@ -90,6 +91,14 @@ M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `r
 ### 5. 关停顺序
 
 `request_stop()` → stop_callback 写门铃 → 线程醒来 → 排空队列 → 退出循环 → `join()` → **调用线程再 `drain()` 一次** → close fd。最后那次 drain 不是冗余：循环可能在 stop 之前就越过了 drain，而之后又有 push 入队，只有停止方自己再排空一次才能保证"stop 返回时已入队的任务都跑过"。析构 = `stop()`，所以 `~engine` 里不会再执行任务（那时异常处理函数指针已经指向正在析构的对象）。
+
+## scheduler：轮转放置与满载重试
+
+- `submit(task<T>&&)`：`release()` → 从游标起点沿环扫一圈 `try_adopt` → 有 engine 接受就返回 true；整圈都满则 `destroy()` 帧并返回 false。放置只给起点，能不能落地由 `try_adopt` 决定（ADR-0005）。
+- 满载重试**不用** `spawn`：`spawn` 失败即销毁帧，任务会凭空消失；`try_adopt` 失败时所有权仍在调用方，同一个句柄可以继续试下一个 engine（ADR-0004 已按此订正）。
+- `engine::load()` 是队列长度采样，只给测试与 demo 看积压，不参与放置。
+- 跨 engine 接力仍走 M3 的 `resume_on`：目标 engine 只是另一个满足 `Executor` 的对象。trace 里每个 engine 线程把自己的泳道命名为 `engine-i`，接力表现为同一条 `resume` 切片出现在另一条泳道上；不做 flow 箭头，因为 `resume_on` 的 `await_suspend` 只拿到类型擦除的句柄，够不到 promise（见 `docs/ig_/M8`）。
+- 泳道命名整段包在 `#if LLCO_TRACE` 里：默认构建没有 `m_lane` 成员、没有 `set_lane`、循环里也没有那一行。
 
 ## 文件布局约定
 
@@ -125,11 +134,11 @@ include/llco/
 | 模块 | 机制 | 换法 |
 |---|---|---|
 | queue | 别名 + 薄适配器 | 改 `queue.decl.hpp` 里的 `queue_backend`（容量常量在 `config.hpp`）；队列装什么元素由使用方自己写，engine 的成员类型在 `engine.decl.hpp` |
-| 放置策略 | runtime 多态（调用频率低） | 构造 scheduler 时传入 |
+| 放置规则 | 写死在 scheduler 里（一个原子游标，ADR-0005） | 出现第二种放置需求时再抽接口 |
 | IO | 只有一个实现（io_uring），具体类 + 极窄接缝 | 出现第二个后端时再抽接口 |
 | trace | 编译期开关 | `LLCO_TRACE=ON`（默认关，零开销） |
 
-热路径（queue）用静态多态保证内联；非热、实现大的（放置策略）用虚接口。CMake 只生成 `config.hpp`，不靠条件排除源码。
+热路径（queue）用静态多态保证内联；目前没有非热虚接口——放置规则写死（ADR-0005），出现第二种需求时再抽。CMake 只生成 `config.hpp`，不靠条件排除源码。
 
 ## 工程约束（本机实测，2026-10）
 

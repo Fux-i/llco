@@ -17,7 +17,7 @@ _Avoid_: fake engine, mock engine
 _Avoid_: dispatcher, thread pool, balancer
 
 **placement policy**:
-scheduler 决定"这个任务放进哪个 engine"的规则。
+scheduler 决定"这个任务放进哪个 engine"的规则。当前只有一种实现——轮转（round robin）——直接写在 `scheduler` 里，没有可替换的接口（ADR-0005）。
 _Avoid_: strategy, load balancing algorithm
 
 **hop**:

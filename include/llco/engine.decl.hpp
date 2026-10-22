@@ -14,6 +14,11 @@
 #include <stop_token>
 #include <thread>
 
+#if LLCO_TRACE
+#include <string>
+#include <string_view>
+#endif
+
 namespace llco {
 
 // last resort for exceptions escaping detached tasks
@@ -30,6 +35,9 @@ class engine {
     std::optional<io::ring>                 m_ring;
     std::atomic<int>                        m_event_fd{-1};
     std::atomic<bool>                       m_sleeping{false};
+#if LLCO_TRACE
+    std::string m_lane;
+#endif
 
     void notify() noexcept;
     void wait() noexcept;
@@ -56,6 +64,11 @@ class engine {
     // created on the first start(), reused across restarts; liburing is not thread-safe, so touch
     // it from the engine thread only
     auto ring() -> io::ring &;
+
+#if LLCO_TRACE
+    // names the loop thread's lane in the trace; call it before start()
+    void set_lane(std::string_view lane);
+#endif
 
     using handle_type       = std::coroutine_handle<>;
     using exception_handler = promise_base::exception_handler;

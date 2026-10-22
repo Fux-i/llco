@@ -74,6 +74,12 @@ inline auto engine::ring() -> io::ring & {
     return *m_ring; // NOLINT(bugprone-unchecked-optional-access): start() fills it
 }
 
+#if LLCO_TRACE
+inline void engine::set_lane(std::string_view lane) {
+    m_lane = lane;
+}
+#endif
+
 inline void engine::notify() noexcept {
     const int fd = m_event_fd.load(std::memory_order_relaxed);
     if (fd < 0)
@@ -95,6 +101,10 @@ inline void engine::wait() noexcept {
 }
 
 inline void engine::loop(const std::stop_token &token) {
+#if LLCO_TRACE
+    if (!m_lane.empty())
+        trace::set_thread_name(m_lane);
+#endif
     const std::stop_callback wake{token, [this] { notify(); }};
     for (;;) {
         ++m_loops;

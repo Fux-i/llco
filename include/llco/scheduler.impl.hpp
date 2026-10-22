@@ -10,6 +10,9 @@ inline scheduler::scheduler(unsigned count) {
     m_engines.reserve(count);
     for (unsigned i = 0; i < count; ++i) {
         m_engines.push_back(std::make_unique<engine>());
+#if LLCO_TRACE
+        m_engines.back()->set_lane("engine-" + std::to_string(i));
+#endif
         m_engines.back()->start();
     }
 }

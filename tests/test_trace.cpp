@@ -100,11 +100,22 @@ TEST(trace, keeps_one_lane_per_thread) {
 
 #if LLCO_TRACE
 #include <llco/engine.decl.hpp>
+#include <llco/scheduler.decl.hpp>
 #include <llco/task.hpp>
+
+#include <atomic>
+#include <chrono>
 
 namespace {
 
+constexpr auto LANE_POLL = std::chrono::milliseconds{1};
+
 task<> noop() {
+    co_return;
+}
+
+task<> touch(std::atomic<int> *done) {
+    ++*done;
     co_return;
 }
 
@@ -123,5 +134,22 @@ TEST(trace, engine_emits_resume_slices) {
 
     EXPECT_EQ(count_of(json, R"("name":"resume","ph":"B")"), 1U);
     EXPECT_EQ(count_of(json, R"("name":"resume","ph":"E")"), 1U);
+}
+
+TEST(trace, scheduler_names_lanes) {
+    scheduler        s{2};
+    std::atomic<int> done{0};
+    for (int i = 0; i < 4; ++i)
+        ASSERT_TRUE(s.submit(touch(&done)));
+    while (done.load() < 4)
+        std::this_thread::sleep_for(LANE_POLL);
+    s.stop();
+
+    ASSERT_TRUE(trace::flush(TRACE_PATH)) << "flush could not write the file";
+    const auto json = slurp(TRACE_PATH);
+    std::remove(TRACE_PATH);
+
+    EXPECT_NE(json.find(R"("name":"engine-0")"), std::string::npos) << "engines need lane names";
+    EXPECT_NE(json.find(R"("name":"engine-1")"), std::string::npos);
 }
 #endif

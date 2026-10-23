@@ -68,6 +68,13 @@ foreach(subdir examples bench)
         list(APPEND LLCO_LINT_SOURCES ${source})
     endforeach()
 endforeach()
+# The bench owns its output contract: --quick must finish and print the CSV header intact.
+if(TARGET llco_bench)
+    add_test(NAME bench_smoke COMMAND llco_bench --quick)
+    set_tests_properties(bench_smoke PROPERTIES TIMEOUT 60
+        PASS_REGULAR_EXPRESSION "metric,n,median_ns")
+endif()
+
 # clang-tidy over every TU; needs >= 21 for modernize-use-scoped-lock.
 # [a-z]*/ keeps build/_deps (third-party) out of the header filter.
 find_program(LLCO_CLANG_TIDY NAMES clang-tidy-22 clang-tidy-21 clang-tidy

@@ -15,6 +15,11 @@ task<> touch(std::atomic<int> *counter) {
     co_return;
 }
 
+task<> record_engine(std::atomic<engine *> *seen) {
+    seen->store(current_engine());
+    co_return;
+}
+
 } // namespace
 
 TEST(threaded_engine, runs_added_tasks) {
@@ -29,6 +34,19 @@ TEST(threaded_engine, runs_added_tasks) {
 
     e.stop(); // drains what is already queued
     EXPECT_EQ(done.load(), task_count);
+}
+
+TEST(threaded_engine, current_engine_is_visible_inside_a_task) {
+    engine                e;
+    std::atomic<engine *> seen{nullptr};
+
+    e.start();
+    ASSERT_TRUE(e.spawn(record_engine(&seen)));
+    while (seen.load() == nullptr)
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    e.stop();
+
+    EXPECT_EQ(seen.load(), &e) << "the loop thread must claim its engine";
 }
 
 TEST(threaded_engine, idle_does_not_spin) {

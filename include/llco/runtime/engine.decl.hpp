@@ -98,6 +98,9 @@ class engine {
     void set_exception_handler(exception_handler handler);
 };
 
+// the engine whose loop is running this thread; nullptr on manual engines and caller threads
+auto current_engine() noexcept -> engine *;
+
 } // namespace llco
 
 #include <llco/runtime/engine.impl.hpp>

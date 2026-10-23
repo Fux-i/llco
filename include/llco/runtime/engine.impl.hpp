@@ -20,6 +20,20 @@
 
 namespace llco {
 
+namespace detail {
+
+// Set for the whole loop thread; sync primitives use it to post wakeups back to their engine.
+inline auto engine_slot() noexcept -> engine *& {
+    static thread_local engine *slot = nullptr;
+    return slot;
+}
+
+} // namespace detail
+
+inline auto current_engine() noexcept -> engine * {
+    return detail::engine_slot();
+}
+
 inline void default_exception_handler(std::exception_ptr e) {
     try {
         std::rethrow_exception(std::move(e));
@@ -101,6 +115,7 @@ inline void engine::wait() noexcept {
 }
 
 inline void engine::loop(const std::stop_token &token) {
+    detail::engine_slot() = this;
 #if LLCO_TRACE
     if (!m_lane.empty())
         trace::set_thread_name(m_lane);

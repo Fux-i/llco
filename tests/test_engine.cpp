@@ -3,6 +3,7 @@
 #include <llco/runtime/engine.decl.hpp>
 #include <llco/core/task.hpp>
 
+#include <atomic>
 #include <coroutine>
 #include <vector>
 
@@ -18,6 +19,11 @@ task<> record(int id) {
 }
 
 task<> noop() {
+    co_return;
+}
+
+task<> record_engine(std::atomic<engine *> *seen) {
+    seen->store(current_engine());
     co_return;
 }
 
@@ -83,6 +89,15 @@ TEST(engine, try_adopt_takes_ownership) {
 
     ASSERT_TRUE(e.try_adopt(noop().release())) << "an idle engine must take the frame over";
     EXPECT_EQ(e.drain(), 1U) << "a detached frame destroys itself at final suspend";
+}
+
+TEST(engine, current_engine_is_null_on_a_manual_engine) {
+    engine                e;
+    std::atomic<engine *> seen{nullptr};
+
+    ASSERT_TRUE(e.spawn(record_engine(&seen)));
+    EXPECT_EQ(e.drain(), 1U);
+    EXPECT_EQ(seen.load(), nullptr) << "a manual engine has no loop thread to claim";
 }
 
 TEST(engine, load_tracks_queued_handles) {

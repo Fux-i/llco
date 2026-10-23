@@ -1,4 +1,5 @@
 #include <iostream>
+#include <llco/config.hpp>
 #include <llco/llco.hpp>
 #include <llco/trace/trace.decl.hpp>
 #include <span>

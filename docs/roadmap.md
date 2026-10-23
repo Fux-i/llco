@@ -35,13 +35,13 @@
 
 **目标**：恢复"能编译 + 能跑测试"的基线，并把目录与文件约定落地。当前这棵树链接不过（`undefined reference to 'main'`）。
 
-**改动**：`CMakeLists.txt`（重写）、`.gitignore`、`include/coro.hpp` → `include/llco/task.hpp`、`include/attr.hpp` → `include/llco/attr.hpp`、`tests/test_transfer.cpp`（改成 gtest 用例）、新增 `examples/` 与 `bench/` 的最小目标、**删除 `src/` 目录**（含空的 `engine.cpp`）。
+**改动**：`CMakeLists.txt`（重写）、`.gitignore`、`include/coro.hpp` → `include/llco/core/task.hpp`、`include/attr.hpp` → `include/llco/attr.hpp`、`tests/test_transfer.cpp`（改成 gtest 用例）、新增 `examples/` 与 `bench/` 的最小目标、**删除 `src/` 目录**（含空的 `engine.cpp`）。
 
 **先写的失败测试**：`transfer.nested_three_levels`（断言 top/middle/leaf 的执行顺序与返回值 22）与 `transfer.void_chain`。此时它们甚至链接不过——这就是红。
 
 **实现顺序**
 
-1. 迁移并改名：`coro.hpp` → `include/llco/task.hpp`，`attr.hpp` → `include/llco/attr.hpp`；include 改成 `#include <llco/task.hpp>`。
+1. 迁移并改名：`coro.hpp` → `include/llco/core/task.hpp`，`attr.hpp` → `include/llco/attr.hpp`；include 改成 `#include <llco/core/task.hpp>`。
 2. `CMakeLists.txt`：`FetchContent` 拉 googletest（固定 tag + `GIT_SHALLOW`）；`add_library(llco INTERFACE)` + `target_include_directories` + `target_compile_features(cxx_std_23)`；clang 下把 `-stdlib=libc++` 挂到 INTERFACE。
 3. `enable_testing()` + 每个 `tests/*.cpp` 一个可执行文件 + `gtest_discover_tests`。
 4. 删掉 `-fcoroutines`（clang 22 会报 unused 警告）；删 `src/`，从构建里移除原来的 `main` 可执行目标。
@@ -57,7 +57,7 @@
 
 **目标**：单线程、无系统调用、确定性地把一批句柄按 FIFO 跑完。
 
-**改动**：`include/llco/queue.decl.hpp` + `queue.impl.hpp`、`engine.decl.hpp` + `engine.impl.hpp`、`config.hpp`、`tests/test_engine.cpp`。
+**改动**：`include/llco/runtime/queue.decl.hpp` + `runtime/queue.impl.hpp`、`runtime/engine.decl.hpp` + `runtime/engine.impl.hpp`、`config.hpp`、`tests/test_engine.cpp`。
 
 **先写的失败测试**
 
@@ -67,7 +67,7 @@
 
 **实现顺序**
 
-1. `queue.decl.hpp`：`queue_backend` 别名指向 `atomic_queue::AtomicQueue2<T, Cap>`，外面包一层二十行的适配器（`try_push` / `try_pop` 转发）；engine 的成员直接写 `queue<std::coroutine_handle<>>`，用哪种队列一目了然，将来换实现只改 `queue_backend` 这一处。
+1. `runtime/queue.decl.hpp`：`queue_backend` 别名指向 `atomic_queue::AtomicQueue2<T, Cap>`，外面包一层二十行的适配器（`try_push` / `try_pop` 转发）；engine 的成员直接写 `queue<std::coroutine_handle<>>`，用哪种队列一目了然，将来换实现只改 `queue_backend` 这一处。
 2. `config.hpp`：`inline constexpr unsigned QUEUE_CAPACITY = 8192;`（先手写，M0 的 CMake 变量以后再接）。
 3. `engine`（具体类，不是模板）：成员一个 `queue<std::coroutine_handle<>> m_queue`，`stopped` 标志留给 M5；manual 模式不建线程、不建 ring。
 4. `bool try_add(handle)` / `void add(handle)` / `bool run_once()` / `std::size_t drain()`。
@@ -83,7 +83,7 @@
 
 **目标**：engine 接管 `task` 的所有权，跑完自毁；异常不逃逸、不静默。
 
-**改动**：`task.hpp`（加 `release()`、promise 加 detached 位）、`engine.decl.hpp` + `engine.impl.hpp`（`spawn`、exception handler）、测试。
+**改动**：`core/task.hpp`（加 `release()`、promise 加 detached 位）、`runtime/engine.decl.hpp` + `runtime/engine.impl.hpp`（`spawn`、exception handler）、测试。
 
 **先写的失败测试**
 
@@ -108,7 +108,7 @@
 
 **目标**：`co_await resume_on(e)` 把当前协程的句柄投进目标 engine，而不是内联继续。
 
-**改动**：`include/llco/executor.decl.hpp`（`Executor` 概念，不拆 impl）、`include/llco/resume_on.hpp`（模板 awaiter + 工厂，单文件）、`tests/test_resume_on.cpp`、`examples/resume_on.cpp`、伞头文件。
+**改动**：`include/llco/concepts/executor.hpp`（`Executor` 概念，不拆 impl）、`include/llco/core/resume_on.hpp`（模板 awaiter + 工厂，单文件）、`tests/test_resume_on.cpp`、`examples/resume_on.cpp`、伞头文件。
 
 **先写的失败测试**
 
@@ -117,7 +117,7 @@
 
 **实现顺序**
 
-1. `executor.decl.hpp`：
+1. `concepts/executor.hpp`：
 
 ```cpp
 template <class E>
@@ -128,7 +128,7 @@ concept Executor = requires(E& e, std::coroutine_handle<> h) {
 
 只要求 `try_add` 返回 `bool`（不放松到 `convertible_to`，也不要求 `noexcept`）；概念名按 `.clang-tidy` 的 `ConceptCase` 用 CamelCase。
 
-2. `resume_on.hpp`：`resume_on_awaiter<E>` 持 `E&`；`await_ready()` 返回 false；`await_suspend(h)` 用对称传递表达"进得去就挂起，进不去就继续"：
+2. `core/resume_on.hpp`：`resume_on_awaiter<E>` 持 `E&`；`await_ready()` 返回 false；`await_suspend(h)` 用对称传递表达"进得去就挂起，进不去就继续"：
 
 ```cpp
 auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<> {
@@ -136,7 +136,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 }
 ```
 
-3. 工厂 `resume_on(E&) -> resume_on_awaiter<E>`，约束写作 `template <Executor E>`。概念在实例化时才检查，所以 `resume_on.hpp` 不 include `engine.decl.hpp`，一行 engine 类型都不用知道。
+3. 工厂 `resume_on(E&) -> resume_on_awaiter<E>`，约束写作 `template <Executor E>`。概念在实例化时才检查，所以 `core/resume_on.hpp` 不 include `runtime/engine.decl.hpp`，一行 engine 类型都不用知道。
 
 4. 跨线程版本留到 M8（那时才有多个 engine）。
 
@@ -153,7 +153,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 **目标**：默认零开销的 Chrome Trace JSON 埋点，能在 Perfetto / chrome://tracing 里看到"每线程一条泳道 + 嵌套任务块"。
 
-**改动**：`include/llco/trace.decl.hpp` + `trace.impl.hpp`（`namespace llco::trace`，不是类/单例）、`engine.impl.hpp` 埋点（`#if LLCO_TRACE` 包住）、`config.hpp` 给 `LLCO_TRACE` 默认值、`CMakeLists.txt` 的 `option(LLCO_TRACE)`、`tests/test_trace.cpp`、`examples/trace.cpp`、`scripts/trace.sh`（一条命令跑完配置 → 编译 → 运行 → 校验）、`CMakePresets.json`（`default`/`asan`/`trace`/`gcc` 四棵树）、`CMakeLists.txt`（可执行文件统一输出到 `build/bin`）。
+**改动**：`include/llco/trace/trace.decl.hpp` + `trace/trace.impl.hpp`（`namespace llco::trace`，不是类/单例）、`runtime/engine.impl.hpp` 埋点（`#if LLCO_TRACE` 包住）、`config.hpp` 给 `LLCO_TRACE` 默认值、`CMakeLists.txt` 的 `option(LLCO_TRACE)`、`tests/test_trace.cpp`、`examples/trace.cpp`、`scripts/trace.sh`（一条命令跑完配置 → 编译 → 运行 → 校验）、`CMakePresets.json`（`default`/`asan`/`trace`/`gcc` 四棵树）、`CMakeLists.txt`（可执行文件统一输出到 `build/bin`）。
 
 **先写的失败测试**
 
@@ -184,7 +184,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 **目标**：engine 拥有一个 `std::jthread`，空闲时阻塞在 `read(eventfd)` 上（此时还没有 ring）；`sync_wait` 让调用线程等到结果。
 
-**改动**：`engine.decl.hpp` / `engine.impl.hpp`（`start`/`stop`、循环、eventfd）、`task.hpp`（promise 的 completion 钩子）、`sync_wait.decl.hpp` + `sync_wait.impl.hpp`、`tests/test_threaded_engine.cpp`、`tests/test_sync_wait.cpp`、`examples/threaded_engine.cpp`、`CMakeLists.txt`（测试 30s 超时）。
+**改动**：`runtime/engine.decl.hpp` / `runtime/engine.impl.hpp`（`start`/`stop`、循环、eventfd）、`core/task.hpp`（promise 的 completion 钩子）、`sync/sync_wait.hpp`、`tests/test_threaded_engine.cpp`、`tests/test_sync_wait.cpp`、`examples/threaded_engine.cpp`、`CMakeLists.txt`（测试 30s 超时）。
 
 **先写的失败测试**
 
@@ -220,7 +220,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 **目标**：把 io_uring 接进 engine 的等待循环。每个 engine 建**一个** ring（不重复构造），用普通 `io_uring_register_eventfd` 把该 engine 的 eventfd 绑进 ring（ring 只建一次，跨 `start`/`stop` 复用），使"完成事件"和"任务门铃"共用一个阻塞点；此时还不做真正的读写，只用 NOP / 超时验证唤醒。
 
-**改动**：`include/llco/io/io_uring.decl.hpp` + `io_uring.impl.hpp`、`engine.impl.hpp`（循环里加"排空 CQ"这一步）、demo。
+**改动**：`include/llco/io/io_uring.decl.hpp` + `io_uring.impl.hpp`、`runtime/engine.impl.hpp`（循环里加"排空 CQ"这一步）、demo。
 
 **先写的失败测试**
 
@@ -249,7 +249,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 **目标**：只在线程真的睡着时才写 eventfd。
 
-**改动**：`engine.impl.hpp`（`m_sleeping` + double check + `wakeup_count()`）、`tests/test_doorbell.cpp`、`examples/threaded_engine.cpp`（打印 doorbells）。
+**改动**：`runtime/engine.impl.hpp`（`m_sleeping` + double check + `wakeup_count()`）、`tests/test_doorbell.cpp`、`examples/threaded_engine.cpp`（打印 doorbells）。
 
 **先写的失败测试**
 
@@ -281,7 +281,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 **目标**：N 个 engine + 轮转放置 + 满载重试 + 跨 engine hop。
 
-**改动**：`scheduler.decl.hpp` + `scheduler.impl.hpp`、`engine.decl/impl.hpp`（`try_adopt`、`load`、trace 泳道命名）、`queue.decl/impl.hpp`（`size`）、`tests/test_scheduler.cpp`、`examples/scheduler.cpp`、ADR-0004 订正 + ADR-0005。
+**改动**：`runtime/scheduler.decl.hpp` + `runtime/scheduler.impl.hpp`、`runtime/engine.decl/impl.hpp`（`try_adopt`、`load`、trace 泳道命名）、`runtime/queue.decl/impl.hpp`（`size`）、`tests/test_scheduler.cpp`、`examples/scheduler.cpp`、ADR-0004 订正 + ADR-0005。
 
 **先写的失败测试**
 
@@ -338,7 +338,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 **目标**：latch → when_all / when_any → event。
 
-**改动**：`latch.decl/impl.hpp`、`when_all.decl/impl.hpp`、`when_any.decl/impl.hpp`、`event.decl/impl.hpp`、测试。
+**改动**：`sync/latch.decl/impl.hpp`、`sync/when_all.decl/impl.hpp`、`sync/when_any.decl/impl.hpp`、`sync/event.decl/impl.hpp`、测试。
 
 **先写的失败测试**
 
@@ -364,7 +364,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 **目标**：真正的 `read` / `write` awaiter，不引入 IO 虚接口（只有一个后端）。
 
-**改动**：`include/llco/io/io_uring.decl/impl.hpp`（加 `read/write`）、`examples/`。
+**改动**：`include/llco/io/io_uring.decl.hpp` + `io_uring.impl.hpp`（加 `read/write`）、`examples/`。
 
 **先写的失败测试**
 

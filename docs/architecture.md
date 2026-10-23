@@ -102,38 +102,33 @@ M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `r
 
 ## 文件布局约定
 
-除 `task.hpp`、`resume_on.hpp`、`attr.hpp`、`config.hpp`、`llco.hpp` 五个单文件外，每个模块拆成 `*.decl.hpp` + `*.impl.hpp`，都放在 `include/llco/` 下；**没有 `src/` 目录**（纯 header-only，CMake 里 `llco` 是 INTERFACE 库）。`task.hpp` 与 `resume_on.hpp` 是模板、没有可拆的非模板实现，所以单文件。
+`include/llco/` 按层分目录，纯 header-only（**没有 `src/`**，CMake 里 `llco` 是 INTERFACE 库）：
 
 ```
 include/llco/
-  task.hpp  attr.hpp  config.hpp          # 单文件例外
-  llco.hpp                                # 伞头文件：使用者只 include 它
-  executor.decl.hpp                       # 只有一个 concept，不拆 impl
-  resume_on.hpp                           # 模板 awaiter，只依赖 Executor 概念
-  queue.decl.hpp        queue.impl.hpp
-  engine.decl.hpp       engine.impl.hpp
-  scheduler.decl.hpp    scheduler.impl.hpp
-  sync_wait.decl.hpp    sync_wait.impl.hpp
-  latch.decl.hpp        latch.impl.hpp
-  event.decl.hpp        event.impl.hpp
-  when_all.decl.hpp     when_all.impl.hpp
-  when_any.decl.hpp     when_any.impl.hpp
-  trace.decl.hpp        trace.impl.hpp
-  io/io_uring.decl.hpp  io/io_uring.impl.hpp
+  llco.hpp                                # 伞头文件：只列用户会直接写到的类型
+  attr.hpp  config.hpp                    # 跨切面：每一层都 include，留在顶层
+  concepts/ executor.hpp                  # 只放 concept
+  core/     task.hpp  resume_on.hpp       # 模板，单文件
+  runtime/  queue.*  engine.*  scheduler.*
+  sync/     sync_wait.hpp                 # M10: latch / when_all / when_any / event
+  trace/    trace.*
+  io/       io_uring.*                    # M12 另开 net/
 ```
 
-四条硬规则：
+五条规则：
 
-1. **入口只有一个**：`*.decl.hpp` 末尾 `#include "同模块.impl.hpp"`；`*.impl.hpp` 顶部反过来 include `.decl.hpp`（`#pragma once` 兜住循环）。用户永远只 include `.decl.hpp`，不存在"忘了 include impl 导致链接错误"。
-2. **非模板函数必须 `inline`**：写在类外的成员函数/自由函数都要 `inline`（类内定义不用）。engine、scheduler、trace 都是具体类（engine 不按队列参数化，只认 `queue_type`），所以 `*.impl.hpp` 里每个定义都要自己加 `inline`。
-3. **纯概念文件不拆**：`executor.decl.hpp`、`config.hpp` 没有 impl。
-4. **伞头文件只给使用者**：`llco.hpp` 只 include 各模块的 `.decl.hpp` 与单文件头；内部头一律精确 include、不得 include 伞头文件；tests 保持精确 include，用来验证每个头文件自包含。可选或重型模块（trace、io）默认不进伞。
+1. **拆分阈值**：非模板的具体类/自由函数，合并后超过 **50 行**或超过 **3 个方法**才拆成 `*.decl.hpp` + `*.impl.hpp`（方法数 = 公开成员函数 + 具名自由函数，awaiter 的 `await_*` 各算一个）。**模板（`task`、`resume_on`）与 `concepts/`、`attr`/`config` 永远单文件**——模板的实现必须留在头里，拆开只会在实例化时才暴露问题。已拆的模块不会因为以后变小而自动合并：阈值只在新增模块或大改时判一次。
+2. **入口只有一个**：拆开的模块由 `*.decl.hpp` 末尾 `#include <llco/.../同模块.impl.hpp>` 收口；`*.impl.hpp` 顶部反过来 include `.decl.hpp`（`#pragma once` 兜住循环）。用户永远只 include `.decl.hpp`，不存在"忘了 include impl 导致链接错误"。
+3. **非模板函数必须 `inline`**：写在类外的成员函数/自由函数都要 `inline`（类内定义不用）。engine、scheduler、trace 都是具体类（engine 不按队列参数化，只认 `queue_type`），所以 `*.impl.hpp` 里每个定义都要自己加 `inline`。
+4. **include 一律全路径**：内部头也写 `#include <llco/core/task.hpp>`，不用同目录相对写法。子目录里的相对写法会先在同一目录里找，M6/M7 就是这样撞上"找不到 attr.hpp"的。
+5. **伞头文件只列用户会直接写到的类型**：`task`、`resume_on`、`engine`、`scheduler`、`sync_wait`。`attr`/`config`/`queue`/`concepts` 是内部依赖，trace/io 是可选重型模块，都不进伞；tests 保持精确 include，用来验证每个头文件自包含。
 
 ## 模块替换
 
 | 模块 | 机制 | 换法 |
 |---|---|---|
-| queue | 别名 + 薄适配器 | 改 `queue.decl.hpp` 里的 `queue_backend`（容量常量在 `config.hpp`）；队列装什么元素由使用方自己写，engine 的成员类型在 `engine.decl.hpp` |
+| queue | 别名 + 薄适配器 | 改 `runtime/queue.decl.hpp` 里的 `queue_backend`（容量常量在 `config.hpp`）；队列装什么元素由使用方自己写，engine 的成员类型在 `runtime/engine.decl.hpp` |
 | 放置规则 | 写死在 scheduler 里（一个原子游标，ADR-0005） | 出现第二种放置需求时再抽接口 |
 | IO | 只有一个实现（io_uring），具体类 + 极窄接缝 | 出现第二个后端时再抽接口 |
 | trace | 编译期开关 | `LLCO_TRACE=ON`（默认关，零开销） |

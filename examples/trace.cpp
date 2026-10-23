@@ -1,6 +1,6 @@
 #include <iostream>
 #include <llco/llco.hpp>
-#include <llco/trace.decl.hpp>
+#include <llco/trace/trace.decl.hpp>
 #include <span>
 
 using namespace llco;

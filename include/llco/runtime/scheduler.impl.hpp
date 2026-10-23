@@ -1,6 +1,6 @@
 #pragma once
 
-#include "scheduler.decl.hpp"
+#include <llco/runtime/scheduler.decl.hpp>
 
 namespace llco {
 

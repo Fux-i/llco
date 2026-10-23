@@ -1,6 +1,6 @@
 #pragma once
 
-#include "attr.hpp"
+#include <llco/attr.hpp>
 
 #include <string_view>
 
@@ -26,4 +26,4 @@ auto flush(std::string_view path) -> bool;
 
 } // namespace llco::trace
 
-#include "trace.impl.hpp"
+#include <llco/trace/trace.impl.hpp>

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "attr.hpp"
-#include "config.hpp"
+#include <llco/attr.hpp>
+#include <llco/config.hpp>
 
 #include <atomic_queue/atomic_queue.h>
 #include <coroutine>
@@ -32,4 +32,4 @@ class queue {
 
 } // namespace llco
 
-#include "queue.impl.hpp"
+#include <llco/runtime/queue.impl.hpp>

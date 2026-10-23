@@ -1,7 +1,7 @@
 #pragma once
 
-#include "attr.hpp"
-#include "engine.decl.hpp"
+#include <llco/attr.hpp>
+#include <llco/runtime/engine.decl.hpp>
 
 #include <atomic>
 #include <memory>
@@ -37,4 +37,4 @@ class scheduler {
 
 } // namespace llco
 
-#include "scheduler.impl.hpp"
+#include <llco/runtime/scheduler.impl.hpp>

@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 #include <llco/config.hpp>
-#include <llco/scheduler.decl.hpp>
-#include <llco/task.hpp>
+#include <llco/runtime/scheduler.decl.hpp>
+#include <llco/core/task.hpp>
 
 #include <atomic>
 #include <chrono>

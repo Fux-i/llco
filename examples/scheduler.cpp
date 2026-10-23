@@ -2,7 +2,7 @@
 #include <chrono>
 #include <iostream>
 #include <llco/llco.hpp>
-#include <llco/trace.decl.hpp>
+#include <llco/trace/trace.decl.hpp>
 #include <map>
 #include <mutex>
 #include <span>

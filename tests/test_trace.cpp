@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 #include <llco/config.hpp>
-#include <llco/trace.decl.hpp>
+#include <llco/trace/trace.decl.hpp>
 
 #include <algorithm>
 #include <cstdio>
@@ -99,9 +99,9 @@ TEST(trace, keeps_one_lane_per_thread) {
 }
 
 #if LLCO_TRACE
-#include <llco/engine.decl.hpp>
-#include <llco/scheduler.decl.hpp>
-#include <llco/task.hpp>
+#include <llco/runtime/engine.decl.hpp>
+#include <llco/runtime/scheduler.decl.hpp>
+#include <llco/core/task.hpp>
 
 #include <atomic>
 #include <chrono>

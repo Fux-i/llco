@@ -1,6 +1,6 @@
 #pragma once
 
-#include "queue.decl.hpp"
+#include <llco/runtime/queue.decl.hpp>
 
 namespace llco {
 

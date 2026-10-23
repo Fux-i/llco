@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
-#include <llco/engine.decl.hpp>
+#include <llco/runtime/engine.decl.hpp>
 #include <llco/io/io_uring.decl.hpp>
-#include <llco/task.hpp>
+#include <llco/core/task.hpp>
 
 #include <atomic>
 #include <chrono>

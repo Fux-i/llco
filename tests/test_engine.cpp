@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 #include <llco/config.hpp>
-#include <llco/engine.decl.hpp>
-#include <llco/task.hpp>
+#include <llco/runtime/engine.decl.hpp>
+#include <llco/core/task.hpp>
 
 #include <coroutine>
 #include <vector>

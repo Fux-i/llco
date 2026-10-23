@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
-#include <llco/engine.decl.hpp>
-#include <llco/resume_on.hpp>
-#include <llco/sync_wait.hpp>
-#include <llco/task.hpp>
+#include <llco/runtime/engine.decl.hpp>
+#include <llco/core/resume_on.hpp>
+#include <llco/sync/sync_wait.hpp>
+#include <llco/core/task.hpp>
 
 #include <stdexcept>
 

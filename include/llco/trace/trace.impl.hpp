@@ -1,6 +1,6 @@
 #pragma once
 
-#include "trace.decl.hpp"
+#include <llco/trace/trace.decl.hpp>
 
 #include <atomic>
 #include <chrono>

@@ -1,10 +1,10 @@
 #pragma once
 
-#include "config.hpp"
-#include "engine.decl.hpp"
+#include <llco/config.hpp>
+#include <llco/runtime/engine.decl.hpp>
 
 #if LLCO_TRACE
-#include "trace.decl.hpp"
+#include <llco/trace/trace.decl.hpp>
 #endif
 
 #include <cerrno>

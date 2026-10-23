@@ -1,7 +1,7 @@
 #pragma once
 
-#include "attr.hpp"
-#include "executor.decl.hpp"
+#include <llco/attr.hpp>
+#include <llco/concepts/executor.hpp>
 
 #include <coroutine>
 

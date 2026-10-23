@@ -8,5 +8,5 @@
 #include "queue.decl.hpp"
 #include "resume_on.hpp"
 #include "scheduler.decl.hpp"
-#include "sync_wait.decl.hpp"
+#include "sync_wait.hpp"
 #include "task.hpp"

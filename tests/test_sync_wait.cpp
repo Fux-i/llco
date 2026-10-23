@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 #include <llco/engine.decl.hpp>
 #include <llco/resume_on.hpp>
-#include <llco/sync_wait.decl.hpp>
+#include <llco/sync_wait.hpp>
 #include <llco/task.hpp>
 
 #include <stdexcept>

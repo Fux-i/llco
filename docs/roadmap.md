@@ -328,9 +328,17 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 2. 指标：单次 add 延迟、跨线程唤醒延迟（提交→resume 的时间）、spawn+完成吞吐、`sync_wait` 往返、任务切换成本（resume 到下一次 resume）。
 3. 固定 CSV 输出，便于前后对比。
 
-**完成标志**：`./build/bench/llco_bench` 输出表格；结果落到 `docs/bench.md`（可选）。
+**完成标志**：`./build/bin/llco_bench` 输出 `#` 环境行 + 五指标 CSV（`add_latency` / `wakeup_latency` / `spawn_task` / `sync_wait_round_trip` / `hop_cost`）；基线落到 `docs/bench.md`；`bench_smoke` 在四棵树的 ctest 里校验格式。
 
-**坑**：WSL2 的时钟/频率不稳，用中位数 + 多次重复；micro-bench 的结论不要当绝对真理。
+**坑**
+
+- **WSL2 的 TSC 与时钟比值会漂**：同一次会话里 `tsc_hz` 依次读到 3992 → 3757 → 4006 → 3685 → 3629 → 3959 MHz，相隔几十分钟、与负载无关。所以每次运行都要重新校准，并把 `tsc_hz` 写进输出；跨次运行的纳秒数不可直接比较。
+- **校准只做一窗**：试过"5 个短窗口取最大"，在 32 个忙线程下与单窗口给出完全相同的结果——这个 VM 里两个钟同源，抢占不会污染比值。于是退回单窗口，不为没见过的问题加代码。
+- **打点开销决定测法**：`steady_clock::now()` 循环里约 20 ns（首对 ~70 ns），`__rdtsc()` 约 8 ns。亚微秒操作（add、hop）用批量平均 + rdtsc；跨线程（wakeup）用 steady_clock，不赌跨核 TSC 偏移。
+- **冒烟测试交给 CMake**：`add_test` + `PASS_REGULAR_EXPRESSION` 校验表头，比在 gtest 里 `system()` 调二进制可靠；`--quick` 全程约 60 ms。
+- **clang-tidy 会咬指针下标与魔数**：`argv[1]` / `ticks[i]` 触发 `pro-bounds-pointer-arithmetic`，改用 `std::span`；迭代次数与分位数要命名常量（`cppcoreguidelines-avoid-magic-numbers` 只看字面量，不看常量声明）。
+- **唤醒延迟取决于 vCPU 睡多深**：连续提交时循环常常还没睡下去，读到 0.35–7 µs；每次采样前 `sleep_for(1ms)` 再提交，稳定在 37–41 µs。口径必须写死，改口径就是改数字。
+- **micro-bench 的结论不要当绝对真理**：同一份代码连续三次的 `hop_cost` 可以差 25%，小于 10–20% 的差异一律当噪声。
 
 ---
 

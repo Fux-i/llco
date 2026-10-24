@@ -75,7 +75,7 @@ concept Executor = requires(E& e, std::coroutine_handle<> h) {
 
 ### 2. 阻塞点：每 engine 一个 ring + 一个共享 eventfd
 
-M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `read(eventfd)` 上，`try_add` / `spawn` 成功后写这个 fd 把线程叫醒。M6 起每个 engine 建一个 io_uring 实例（只建一次、跨 `start`/`stop` 复用、只由本线程使用），用**普通** `io_uring_register_eventfd` 把该 engine 的 eventfd 绑进 ring，于是**完成通知和门铃共用一个阻塞点**，不需要 epoll（ADR-0003）。醒来后先排空任务队列、再 `reap()` 排空 CQ ring，两处都空才回去阻塞；一个 ring 只吃一个注册，所以 `stop()` 先 unregister 再 close fd。
+M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `read(eventfd)` 上，`try_add` / `spawn` 成功后写这个 fd 把线程叫醒。M6 起每个 engine 建一个 io_uring 实例（只建一次、跨 `start`/`stop` 复用、只由本线程使用），用**普通** `io_uring_register_eventfd` 把该 engine 的 eventfd 绑进 ring，于是**完成通知和门铃共用一个阻塞点**，不需要 epoll（ADR-0003）。醒来后的顺序是 `drain() → submit() → reap()`：排空任务队列、把这一轮 arm 出的 SQE 一次交给内核、再排空 CQ ring；阻塞条件是"任务队列空、CQ 空、且 SQ 里没有未提交项"（`io_uring_sq_ready()`——睡下去就会把 op 搁浅）。一个 ring 只吃一个注册，所以 `stop()` 先 unregister 再 close fd。IO 的提交、完成与关停各只有一条路径（ADR-0006）。
 
 **门铃只在 loop 真的睡着时才响**（M7）：`notify()` 里 `if (!m_sleeping.exchange(false)) return;`，loop 里先 `m_sleeping = true`、再看一眼队列与 CQ（只读，不运行任务），两处都空才 `read`——置位必须在复查之前，写反就是漏唤醒（窗口只有几条指令，压力测试未必复现）。`stop_requested()` 因此也要在置位之后再查一次，否则停机回调可能正好落在"查 stop"与"置位"之间而不敲门。内核 completion 直接写 fd、不经过这个标志，所以被完成唤醒后标志短暂仍是 true，此时到达的 push 会多敲一次门：多一次系统调用，无害。
 
@@ -91,7 +91,12 @@ M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `r
 
 ### 5. 关停顺序
 
-`request_stop()` → stop_callback 写门铃 → 线程醒来 → 排空队列 → 退出循环 → `join()` → **调用线程再 `drain()` 一次** → close fd。最后那次 drain 不是冗余：循环可能在 stop 之前就越过了 drain，而之后又有 push 入队，只有停止方自己再排空一次才能保证"stop 返回时已入队的任务都跑过"。析构 = `stop()`，所以 `~engine` 里不会再执行任务（那时异常处理函数指针已经指向正在析构的对象）。
+`request_stop()` → stop_callback 写门铃 → 线程醒来 → 排空队列 → **等到 `running_io() == 0`** → 退出循环 → `join()` → **调用线程再 `drain()` 一次** → unregister eventfd → close fd。两处等待各有理由：
+
+- 循环自己的退出条件里带 `running_io() == 0`：**内核把 op 记在提交它的线程上**，提交线程一退出，还没完成的 op 就会以 `-ECANCELED` 回来（实测 `res=-125`；由仍然活着的线程提交则正常 `res=1`）。所以关停期间的排空必须在循环线程上完成，不能留给 join 之后的调用线程。
+- 最后那次 drain 仍不是冗余：循环可能在 stop 之前就越过了 drain，而之后又有 push 入队，只有停止方自己再排空一次才能保证"stop 返回时已入队的任务都跑过"；这些任务若 arm 了新 op，由调用线程提交并等回来，调用线程活到最后。
+
+析构 = `stop()`，所以 `~engine` 里不会再执行任务（那时异常处理函数指针已经指向正在析构的对象）。代价：优雅停机对自续任务无界（被恢复的任务再 arm 新 op，`running_io` 不归零），强制切断要等取消机制。
 
 ## scheduler：轮转放置与满载重试
 
@@ -137,7 +142,7 @@ include/llco/
   runtime/  queue.*  engine.*  scheduler.*
   sync/     event.hpp  latch.hpp  sync_wait.hpp   # 基元 + 阻塞点；组合配方写在文档里
   trace/    trace.*
-  io/       io_uring.*                    # M12 另开 net/
+  io/       io_uring.*                    # ring + rw_awaiter 同文件（互相依赖）；M12 另开 net/
 ```
 
 五条规则：
@@ -154,7 +159,7 @@ include/llco/
 |---|---|---|
 | queue | 别名 + 薄适配器 | 改 `runtime/queue.decl.hpp` 里的 `queue_backend`（容量常量在 `config.hpp`）；队列装什么元素由使用方自己写，engine 的成员类型在 `runtime/engine.decl.hpp` |
 | 放置规则 | 写死在 scheduler 里（一个原子游标，ADR-0005） | 出现第二种放置需求时再抽接口 |
-| IO | 只有一个实现（io_uring），具体类 + 极窄接缝 | 出现第二个后端时再抽接口 |
+| IO | 只有一个实现（io_uring），具体类 + awaiter | 出现第二个后端时再抽接口；awaiter 与 ring 互相依赖，故同文件 |
 | trace | 编译期开关 | `LLCO_TRACE=ON`（默认关，零开销） |
 
 热路径（queue）用静态多态保证内联；目前没有非热虚接口——放置规则写死（ADR-0005），出现第二种需求时再抽。CMake 只生成 `config.hpp`，不靠条件排除源码。
@@ -181,6 +186,9 @@ include/llco/
   - 一个 ring 只能注册一个 eventfd，重复注册返回 `-EBUSY`：engine 的 ring 跨 `start`/`stop` 复用，`stop()` 先 `io_uring_unregister_eventfd` 再 close。
   - 实测：`read(eventfd)` 既能被内核的完成通知唤醒，也能被其它线程的 `write` 唤醒；一次通知可能对应多个完成；醒来时也可能什么都没有。
   - `io_uring_wait_cqe` 返回 `-EINTR` 且不重试——这也是不用它做阻塞点的原因之一（ADR-0003）。
+  - **`get_sqe()` 不清 `user_data`**（只清 `flags/ioprio/rw_flags/buf_index/personality/file_index/addr3/__pad2[0]`，槽位重用时带着旧值）：裸 op 必须显式 `set_data(nullptr)`，awaiter 每次都要 `set_data(this)`。
+  - **空 `submit()` 不进内核**（200 次触发 0 次 `io_uring_enter`，2.62 ns/次），而且提交即还槽（`khead` 前进，不必等 reap）：所以"每轮 submit + SQ 满时反冲"是免费的。`io_uring_sq_ready()` 就是 `sqe_tail - *khead`（已填未提交）。
+  - **提交 op 的线程一退出，内核就取消这个 op**（`-ECANCELED`，实测 `res=-125`）：停机排空必须发生在提交线程上。`io_uring_queue_exit` 同样不等也不取消（有 op 在飞时 37 µs 返回）。
 - **门铃只在睡着时响**（`strace -c -f`，1000 个任务）：`write` 1006 → 9、`read` 1009 → 14；饱和注入 10 万次 push 只响 1 次。生产慢于消费时每次 push 都会响（~88/250），因为线程确实在睡。
 - **测试统一 30s 超时**：`gtest_discover_tests(... PROPERTIES TIMEOUT 30)`。M5 起有阻塞原语，实现写错会让用例挂死而不是失败，超时至少能让 ctest 报出来。
 - **可视化**：本机 `perf` 无法录 sched tracepoint（tracefs 只读、`perf_event_paranoid=2`、无 sudo），统一走 **Chrome Trace JSON + Perfetto**。本机**没有** `trace_processor`（也没有 `perfetto` Python 模块），所以 trace 的结构校验用 `python3` + `json`，可视化只能人工把 `trace.json` 拖进 ui.perfetto.dev。

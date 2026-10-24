@@ -377,28 +377,60 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 ## M11 · io_uring 读写
 
-**目标**：真正的 `read` / `write` awaiter，不引入 IO 虚接口（只有一个后端）。
+**目标**：真正的 `read` / `write` awaiter，不引入 IO 虚接口（只有一个后端）。完成。
 
-**改动**：`include/llco/io/io_uring.decl.hpp` + `io_uring.impl.hpp`（加 `read/write`）、`examples/`。
+**改动**：`include/llco/io/io_uring.decl.hpp` + `io_uring.impl.hpp`（`rw_awaiter` + 两个工厂、`ring::reap()` 分发、`running_io()` / `sq_pending()`）、`runtime/engine.impl.hpp`（循环里 `submit()`、阻塞条件加 `sq_pending() == 0`、循环退出现在等 `running_io() == 0`、`stop()` 的尾部 drain）、`config.hpp`（`RING_ENTRIES` 注释）、`tests/test_io.cpp`（+7）、`examples/io_read.cpp`、ADR-0006、`docs/ig_/M11/`。
 
-**先写的失败测试**
+**接口**
 
-- `io.read_completes_with_bytes`（管道或 eventfd 上读）
-- `io.read_wakes_only_the_right_coroutine`（两个协程各等一个 op，CQE 按 `user_data` 分发）
-- `io.failed_op_propagates_negative_errno`
+```cpp
+co_await io::read(e.ring(), fd, buffer);   // -> std::size_t，res < 0 抛 system_error
+co_await io::write(e.ring(), fd, buffer);  // 同一个 rw_awaiter，bool m_write 区分读写
+```
+
+ring 必须显式传进去：op 只能在 ring 属主线程上提交，没有"隐式当前 engine"的兜底路径——sync_wait 的 root 线程（没有 engine）因此用不了 IO。
+
+**先写的失败测试**（7 条，其中 5 条不需要 engine、不需要线程、不需要 sleep）
+
+| 用例 | 造法 |
+|---|---|
+| `io.read_completes_with_bytes` | 裸 ring：`t.resume()` arm → `r.submit()` → 写管道 → `while (!t.handle().done()) r.reap()`；顺带断言 `running_io()` 1→0 |
+| `io.read_wakes_only_the_right_coroutine` | 两条管道两个 task，只写一条，断言另一个没被唤醒 |
+| `io.failed_op_propagates_negative_errno` | 管道写端做 read → `-EBADF` → `system_error`（实测写端与已关闭 fd 都是 `-EBADF`，不可区分） |
+| `io.write_puts_bytes_into_the_pipe` | 写进去再从另一头读回来 |
+| `io.sq_full_flushes_and_retries` | `io::ring r{2}`：第三个 op 必然撞满，反冲后 `sq_pending() == 1` |
+| `io.engine_dispatches_completion` | 起 engine，验证 submit → eventfd → reap → 内联恢复整条路 |
+| `io.stop_waits_for_running_io` | 写线程晚 20 ms 写；断言 stop 等到了、返回后已完成、`running_io()` 归零 |
 
 **实现顺序**
 
-1. `co_await io.read(fd, std::span<std::byte>)`：取 sqe、填 buffer+user_data（指向 awaiter）、提交、挂起。
-2. CQE 到达：用 `user_data` 找回 awaiter → 写结果 → resume 父协程。
-3. 错误：`cqe->res` 为负即 errno，转成 `std::error_code` 或异常（二选一，先选异常）。
-4. 提交队列满（`-EBUSY` / SQ 满）时的等待策略：先提交、再 peek，必要时小自旋。
+1. awaiter 只填 SQE：`sqe → prep_read/prep_write → set_data(this) → running_io++`，不提交。
+2. 循环 `drain() → submit() → reap()`；阻塞条件加 `sq_pending() == 0`（空 `submit()` 不进内核，实测 2.62 ns/次）。
+3. `reap()`：`peek → 拷贝 res 与 user_data → cqe_seen → complete(res)`；`complete` 里 `running_io--` 再 `resume`。
+4. 裸 op（M6 的 timeout）显式 `set_data(nullptr)`：`get_sqe()` 不清 `user_data`。
+5. SQ 满反冲；循环退出等 `running_io() == 0`；`stop()` = `request_stop + join + 尾部 drain`。
+6. `examples/io_read.cpp`。
 
-**完成标志**：demo 用管道做一次读，打印收到的字节与耗时。
+**完成标志**
 
-**坑**：sqe 与 buffer 的生命周期必须覆盖到 CQE 回来（awaiter 必须活在帧里）；`user_data` 指针不能悬空；一个 op 只能对应一个 awaiter。
+`./build/bin/io_read`：
 
----
+```
+[submit] one read is armed; the loop goes back to read(eventfd)
+[read] 5 bytes after 52 ms: hello
+[stop] 3 loop iterations, running io: 0
+```
+
+四棵树 ctest 全绿：default 57、asan 57、trace 59、gcc 57。
+
+**坑**
+
+- **提交 op 的线程一退出，内核就取消这个 op**（`-ECANCELED`，实测 `res=-125`）：第一版把排空放在 `join()` 之后的调用线程上，协程里抛 `Operation canceled`，detached 任务直接 `terminate`。修法：排空回到循环线程（退出条件带 `running_io() == 0`）。最小复现 `docs/ig_/M11/01_*`。
+- **`get_sqe()` 的 NULL 分支会被优化掉**：调用方无条件解引用返回值，优化器断定 NULL 不可达；2 槽 ring 在 `-O2` 下安静发出第 3 个 SQE，`-O0` 才崩。修法：`while (sqe == nullptr) { submit(); sqe = sqe(); }`，既消灭 UB，也正好是 SQ 满策略。复现 `docs/ig_/M11/02_*`。
+- **`get_sqe()` 不清 `user_data`**（只清八个字段）：裸 op 必须显式 `set_data(nullptr)`，否则分发时把旧值当指针解引用。
+- **`io_uring_queue_exit` 不等也不取消**（有 op 在飞时 37 µs 返回）：`~ring` 之后内核不会再交回 CQE，所以"等 op 回家"必须在 ring 还活着的时候做。
+- **优雅停机对自续任务无界**：echo 的 read 循环一被恢复就 re-arm 新 op，`running_io` 不归零，`stop()` / `~engine` 会一直等；强制切断要等取消机制（见"延伸"）。
+- **gtest 宏吃花括号里的逗号**：`EXPECT_EQ(std::string_view{a, b}, x)` 编译不过，先存具名变量。
 
 ## M12 · TCP connector / echo server
 

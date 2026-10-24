@@ -3,6 +3,7 @@
 #include <llco/io/io_uring.decl.hpp>
 #include <llco/core/task.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cerrno>
@@ -69,6 +70,11 @@ task<std::size_t> read_once(io::ring &r, int fd, std::span<std::byte> buffer) {
 task<> read_into(engine *e, int fd, std::span<std::byte> buffer, std::atomic<bool> *done) {
     (void)co_await io::read(e->ring(), fd, buffer);
     done->store(true);
+}
+
+task<> write_once(io::ring &r, int fd, std::span<std::byte> buffer) {
+    (void)co_await io::write(r, fd, buffer);
+    co_return;
 }
 
 } // namespace
@@ -205,6 +211,27 @@ TEST(io, failed_op_propagates_negative_errno) {
         EXPECT_EQ(error.code().value(), EBADF);
     }
     EXPECT_TRUE(raised) << "a failed op did not raise";
+    EXPECT_EQ(r.running_io(), 0U);
+}
+
+TEST(io, write_puts_bytes_into_the_pipe) {
+    io::ring           r;
+    std::array<int, 2> fds{};
+    ASSERT_EQ(::pipe(fds.data()), 0);
+    std::array<char, PAYLOAD.size()> payload{};
+    std::ranges::copy(PAYLOAD, payload.begin());
+
+    auto t = write_once(r, fds[1], std::as_writable_bytes(std::span{payload}));
+    t.resume();
+    r.submit();
+    while (!t.handle().done())
+        r.reap();
+
+    std::array<char, PAYLOAD.size()> received{};
+    ASSERT_EQ(::read(fds[0], received.data(), received.size()),
+              static_cast<ssize_t>(received.size()));
+    const std::string_view back{received.data(), received.size()};
+    EXPECT_EQ(back, PAYLOAD);
     EXPECT_EQ(r.running_io(), 0U);
 }
 

@@ -73,9 +73,9 @@ inline auto ring::running_io() const noexcept -> unsigned {
 }
 
 inline rw_awaiter::rw_awaiter(ring &owner, int fd, std::span<std::byte> buffer,
-                              std::uint64_t offset) noexcept
+                              std::uint64_t offset, bool write) noexcept
     : m_ring{&owner}, m_buffer{buffer.data()}, m_len{static_cast<unsigned>(buffer.size())},
-      m_offset{offset}, m_fd{fd} {}
+      m_offset{offset}, m_fd{fd}, m_write{write} {}
 
 inline auto rw_awaiter::await_ready() const noexcept -> bool {
     return false;
@@ -84,7 +84,10 @@ inline auto rw_awaiter::await_ready() const noexcept -> bool {
 inline void rw_awaiter::await_suspend(std::coroutine_handle<> handle) {
     m_handle = handle;
     auto *sqe = m_ring->sqe();
-    ::io_uring_prep_read(sqe, m_fd, m_buffer, m_len, m_offset);
+    if (m_write)
+        ::io_uring_prep_write(sqe, m_fd, m_buffer, m_len, m_offset);
+    else
+        ::io_uring_prep_read(sqe, m_fd, m_buffer, m_len, m_offset);
     ::io_uring_sqe_set_data(sqe, this);
     m_ring->m_running_io.fetch_add(1, std::memory_order_relaxed);
 }
@@ -103,7 +106,12 @@ inline void rw_awaiter::complete(int result) noexcept {
 
 inline auto read(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset)
     -> rw_awaiter {
-    return {owner, fd, buffer, offset};
+    return {owner, fd, buffer, offset, false};
+}
+
+inline auto write(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset)
+    -> rw_awaiter {
+    return {owner, fd, buffer, offset, true};
 }
 
 inline auto to_kernel_time(std::chrono::nanoseconds timeout) noexcept -> __kernel_timespec {

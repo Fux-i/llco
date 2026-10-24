@@ -69,10 +69,12 @@ class [[LLCO_AWAIT_HINT]] rw_awaiter {
     unsigned                m_len;
     std::uint64_t           m_offset;
     int                     m_fd;
+    bool                    m_write;
     int                     m_result{};
 
   public:
-    rw_awaiter(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset) noexcept;
+    rw_awaiter(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset,
+               bool write) noexcept;
     CLASS_NO_COPY_MOVE(rw_awaiter);
 
     auto await_ready() const noexcept -> bool;
@@ -92,6 +94,9 @@ class [[LLCO_AWAIT_HINT]] rw_awaiter {
 
 // Reads into buffer; it must be co_awaited on the ring's owner thread.
 auto read(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset = 0) -> rw_awaiter;
+
+// Writes from buffer; it must be co_awaited on the ring's owner thread.
+auto write(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset = 0) -> rw_awaiter;
 
 // Deadline in the form a timeout op expects; it must outlive the op.
 inline auto to_kernel_time(std::chrono::nanoseconds timeout) noexcept -> __kernel_timespec;

@@ -3,9 +3,11 @@
 #include <llco/runtime/engine.decl.hpp>
 #include <llco/runtime/scheduler.decl.hpp>
 #include <llco/sync/latch.hpp>
+#include <llco/sync/sync_wait.hpp>
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <thread>
 
 using namespace llco;
@@ -13,7 +15,10 @@ using namespace std::chrono_literals;
 
 namespace {
 
-constexpr auto POLL = 1ms;
+constexpr auto        POLL            = 1ms;
+constexpr auto        CHILD_SLEEP     = 50ms;
+constexpr auto        CONCURRENCY_MAX = 150ms;
+constexpr std::size_t CHILDREN        = 4;
 
 task<> latch_waiter_steps(latch *l, int *steps) {
     *steps = 1;
@@ -30,6 +35,19 @@ task<> thread_waiter(latch *l, std::atomic<std::thread::id> *before,
     co_await l->wait();
     after->store(std::this_thread::get_id());
     done->store(true);
+    co_return;
+}
+
+task<> sleeping_child(latch *done) {
+    std::this_thread::sleep_for(CHILD_SLEEP);
+    done->count_down();
+    co_return;
+}
+
+task<> fan_out(scheduler *s, latch *done, std::size_t children) {
+    for (std::size_t i = 0; i < children; ++i)
+        (void)s->submit(sleeping_child(done));
+    co_await done->wait();
     co_return;
 }
 
@@ -69,6 +87,18 @@ TEST(latch, zero_count_is_ready) {
     ASSERT_TRUE(e.spawn(latch_waiter_steps(&l, &steps)));
     ASSERT_TRUE(e.run_once());
     EXPECT_EQ(steps, 2) << "a zero latch must not suspend";
+}
+
+TEST(latch, fan_out_runs_concurrently) {
+    scheduler s{static_cast<unsigned>(CHILDREN)};
+    latch     done{CHILDREN};
+
+    const auto begin = std::chrono::steady_clock::now();
+    sync_wait(fan_out(&s, &done, CHILDREN));
+    const auto elapsed = std::chrono::steady_clock::now() - begin;
+    s.stop();
+
+    EXPECT_LT(elapsed, CONCURRENCY_MAX) << "children ran serially instead of concurrently";
 }
 
 TEST(latch, cross_engine_countdown) {

@@ -17,7 +17,9 @@ constexpr auto POLL_INTERVAL = 1ms;
 
 // Arm one timeout on the engine ring: submitting must happen on the engine thread.
 task<> arm_timeout(engine *e, __kernel_timespec *deadline) {
-    ::io_uring_prep_timeout(e->ring().sqe(), deadline, 0, 0);
+    auto *sqe = e->ring().sqe();
+    ::io_uring_prep_timeout(sqe, deadline, 0, 0);
+    ::io_uring_sqe_set_data(sqe, nullptr); // a raw op has no awaiter to dispatch to
     e->ring().submit();
     co_return;
 }

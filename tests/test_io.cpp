@@ -20,12 +20,13 @@ constexpr auto BUDGET        = 1s;
 constexpr auto POLL_INTERVAL = 1ms;
 constexpr auto SETTLE        = 50ms;
 
-// The deadline lives outside the coroutine: the kernel reads it until the CQE lands.
+// Raw ops are never dispatched to a coroutine, so they must clear user_data themselves:
+// get_sqe() leaves the previous slot's value in place.
 task<> arm_timeouts(engine *e, __kernel_timespec *deadline, std::uint64_t count) {
     for (std::uint64_t i = 0; i < count; ++i) {
         auto *sqe = e->ring().sqe();
         ::io_uring_prep_timeout(sqe, deadline, 0, 0);
-        ::io_uring_sqe_set_data64(sqe, i);
+        ::io_uring_sqe_set_data(sqe, nullptr);
     }
     e->ring().submit();
     co_return;

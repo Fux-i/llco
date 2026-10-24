@@ -40,6 +40,10 @@ class ring {
     [[LLCO_DISCARD_HINT]]
     auto pending() const noexcept -> unsigned;
 
+    // SQEs filled but not handed to the kernel yet; blocking while this is non-zero strands them.
+    [[LLCO_DISCARD_HINT]]
+    auto sq_pending() const noexcept -> unsigned;
+
     // Hands every reported completion back to the kernel; returns how many were seen.
     auto reap() -> std::size_t;
 

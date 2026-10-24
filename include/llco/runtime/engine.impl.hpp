@@ -124,7 +124,8 @@ inline void engine::loop(const std::stop_token &token) {
     for (;;) {
         ++m_loops;
         (void)drain();
-        (void)ring().reap(); // peek after the work: an op that finished synchronously never rings
+        (void)ring().submit(); // one enter per batch; nothing pending costs no syscall
+        (void)ring().reap();   // completions that landed inside submit(), or since the last wakeup
         if (token.stop_requested())
             return;
         // Announce the sleep first, then look: a push that landed before this look is still
@@ -132,7 +133,8 @@ inline void engine::loop(const std::stop_token &token) {
         // lost wakeup. The stop token needs the same look, because its callback went through
         // the sleeping check too and may have decided not to ring.
         m_sleeping = true;
-        if (m_queue.empty() && ring().pending() == 0 && !token.stop_requested())
+        if (m_queue.empty() && ring().pending() == 0 && ring().sq_pending() == 0 &&
+            !token.stop_requested())
             wait();
         m_sleeping = false;
     }

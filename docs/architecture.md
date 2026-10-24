@@ -129,6 +129,15 @@ const int winner = co_await first->wait();
 
 不做组合器的理由：`when_all` 只是 latch 的三行样板，factory 形态还会限制"子任务由别人提交"的场景；`when_any` 的难点是共享状态寿命，做成组件反而把"剩余任务还在跑"藏起来。等以后有取消机制，`when_any` 才有"取消掉队者"的实质工作，那时再考虑组件化。
 
+## 网络层（M12）
+
+一条连接 = 一个 detached 协程：`accept` 拿到 fd → `recv`/`send` 循环 → 读回 0（EOF）或异常 → `shutdown(SHUT_WR)` → `close`。`accept_loop` 自己也是协程，每接一个连接就 `spawn` 一个回显协程（队列满载按 ADR-0004 丢连接并关 fd）。
+
+- **数据面只走 `send`/`recv`**：`IORING_OP_WRITE` 在 peer 已关闭时 `res=-32` 且**真的投递 SIGPIPE**（SIG_DFL 下杀进程），`IORING_OP_SEND` 不会；`io::send` 硬编码 `MSG_NOSIGNAL`，不赌内核版本。`read`/`write` 只给 pipe 与文件（ADR-0007）。
+- **提交时机**：`accept`/`connect`/`cancel` 与读写共用同一条路径——awaiter 只填 SQE，循环统一 `submit`；`connect` 的 `sockaddr_in` 被内核在提交时拷走，所以地址只需活到协程挂起期间。
+- **关停**：`stop()` 要等 `running_io() == 0`，而监听 fd 上的 pending accept 永远等不到——`io::cancel(ring, fd)` 把它打断成 `-ECANCELED`；cancel 自己返回 `0`，没有可取消的 op 时 `-ENOENT`（映射成 `false`，不是异常）。demo 的收尾是：信号 → `sync_wait` 一个先 `resume_on` 到 engine 的 cancel 任务 → `stop()` → `close(listener)`。
+- **fd 契约**：listener 与 accepted fd 都是非阻塞 + close-on-exec；关掉之前该 fd 上不能有在飞 op。IPv4 only（`connect` 收 `sockaddr_in`）。
+
 ## 文件布局约定
 
 `include/llco/` 按层分目录，纯 header-only（**没有 `src/`**，CMake 里 `llco` 是 INTERFACE 库）：
@@ -142,7 +151,8 @@ include/llco/
   runtime/  queue.*  engine.*  scheduler.*
   sync/     event.hpp  latch.hpp  sync_wait.hpp   # 基元 + 阻塞点；组合配方写在文档里
   trace/    trace.*
-  io/       io_uring.*                    # ring + rw_awaiter 同文件（互相依赖）；M12 另开 net/
+  io/       io_uring.*                    # ring + 五个 awaiter 同文件（互相依赖）
+  net/      socket.*                      # socket 就绪帮手，不碰 io_uring
 ```
 
 五条规则：
@@ -160,6 +170,7 @@ include/llco/
 | queue | 别名 + 薄适配器 | 改 `runtime/queue.decl.hpp` 里的 `queue_backend`（容量常量在 `config.hpp`）；队列装什么元素由使用方自己写，engine 的成员类型在 `runtime/engine.decl.hpp` |
 | 放置规则 | 写死在 scheduler 里（一个原子游标，ADR-0005） | 出现第二种放置需求时再抽接口 |
 | IO | 只有一个实现（io_uring），具体类 + awaiter | 出现第二个后端时再抽接口；awaiter 与 ring 互相依赖，故同文件 |
+| 网络 | `send`/`recv` + `accept`/`connect` + `cancel`，IPv4 only | 要 IPv6 / 超时 / TLS 时再扩，不抽后端接口 |
 | trace | 编译期开关 | `LLCO_TRACE=ON`（默认关，零开销） |
 
 热路径（queue）用静态多态保证内联；目前没有非热虚接口——放置规则写死（ADR-0005），出现第二种需求时再抽。CMake 只生成 `config.hpp`，不靠条件排除源码。
@@ -189,6 +200,10 @@ include/llco/
   - **`get_sqe()` 不清 `user_data`**（只清 `flags/ioprio/rw_flags/buf_index/personality/file_index/addr3/__pad2[0]`，槽位重用时带着旧值）：裸 op 必须显式 `set_data(nullptr)`，awaiter 每次都要 `set_data(this)`。
   - **空 `submit()` 不进内核**（200 次触发 0 次 `io_uring_enter`，2.62 ns/次），而且提交即还槽（`khead` 前进，不必等 reap）：所以"每轮 submit + SQ 满时反冲"是免费的。`io_uring_sq_ready()` 就是 `sqe_tail - *khead`（已填未提交）。
   - **提交 op 的线程一退出，内核就取消这个 op**（`-ECANCELED`，实测 `res=-125`）：停机排空必须发生在提交线程上。`io_uring_queue_exit` 同样不等也不取消（有 op 在飞时 37 µs 返回）。
+  - **`IORING_OP_WRITE` 在 socket 上会 SIGPIPE**：peer 已 RST 时 `res=-32` 且信号真的投递（SIG_DFL 子进程被信号 13 杀死）；`IORING_OP_SEND` 在 flags=0 时就已抑制，`io::send` 仍显式带 `MSG_NOSIGNAL`。
+  - `prep_accept` 的 flags 只作用于新 socket（`SOCK_NONBLOCK|SOCK_CLOEXEC`），不影响 accept 本身；`accept(NULL, NULL)` 合法；`prep_connect` 在提交时拷走地址，阻塞/非阻塞 socket 都能用。
+  - `prep_cancel_fd` 能打断 pending accept：cancel 的 CQE 先到（`0`），目标随后（`-ECANCELED`）；没有可取消的 op 时 cancel 返回 `-ENOENT`。
+  - 本机 `nc` 是 OpenBSD netcat 1.226（`/usr/bin/nc`，另有 `/usr/bin/netcat`），没有 `ncat`/`socat`；loopback 的 connect + echo 实测可用。
 - **门铃只在睡着时响**（`strace -c -f`，1000 个任务）：`write` 1006 → 9、`read` 1009 → 14；饱和注入 10 万次 push 只响 1 次。生产慢于消费时每次 push 都会响（~88/250），因为线程确实在睡。
 - **测试统一 30s 超时**：`gtest_discover_tests(... PROPERTIES TIMEOUT 30)`。M5 起有阻塞原语，实现写错会让用例挂死而不是失败，超时至少能让 ctest 报出来。
 - **可视化**：本机 `perf` 无法录 sched tracepoint（tracefs 只读、`perf_event_paranoid=2`、无 sudo），统一走 **Chrome Trace JSON + Perfetto**。本机**没有** `trace_processor`（也没有 `perfetto` Python 模块），所以 trace 的结构校验用 `python3` + `json`，可视化只能人工把 `trace.json` 拖进 ui.perfetto.dev。

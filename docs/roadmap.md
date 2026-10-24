@@ -434,17 +434,65 @@ ring 必须显式传进去：op 只能在 ring 属主线程上提交，没有"�
 
 ## M12 · TCP connector / echo server
 
-**目标**：网络组件，验证 IO 层可用。
+**目标**：网络组件，验证 IO 层可用。完成。
 
-**改动**：`include/llco/net/`、`examples/echo_server.cpp`、测试。
+**改动**：`io/io_uring.*`（`completion` 基类 + `accept` / `connect` / `send` / `recv` / `cancel` 五个 awaiter）、`net/socket.decl.hpp` + `.impl.hpp`（`listen_tcp` / `local_port` / `tcp_socket` / `loopback`）、`examples/echo_server.cpp`、`tests/test_io.cpp`（+5）、`tests/test_tcp.cpp`（新建，4 条）、ADR-0007、`docs/ig_/M12/`。
 
-**先写的失败测试**：`tcp.connect_and_echo`（本机 loopback）。
+**接口**
 
-**实现顺序**：socket/bind/listen → accept awaiter → connect awaiter → read/write 循环 → 关闭语义（半关闭、错误码映射）。
+```cpp
+co_await io::accept(e.ring(), listener);                   // -> 新 fd（非阻塞 + CLOEXEC）
+co_await io::connect(e.ring(), fd, net::loopback(port));   // IPv4 only
+co_await io::recv(e.ring(), fd, buffer);                   // 0 = EOF
+co_await io::send(e.ring(), fd, buffer);                   // 内部 MSG_NOSIGNAL
+co_await io::cancel(e.ring(), fd);                         // true = 真取消了，false = 没有在飞 op
+```
 
-**完成标志**：`./build/examples/echo_server` 起服务，`nc` 能连通并回显。
+`read` / `write` 只给 pipe 与文件：`IORING_OP_WRITE` 在 socket 上会 SIGPIPE（实测杀进程）。
 
-**坑**：fd 生命周期与 engine 关停的配合（别在回调里丢 fd）。
+**先写的失败测试**（9 条）
+
+| 用例 | 造法 |
+|---|---|
+| `io.send_writes_to_the_peer` / `io.recv_returns_zero_at_eof` | socketpair + 裸 ring，无 engine 无线程 |
+| `io.accept_returns_a_socket` / `io.connect_reaches_a_listener` | 裸 ring + 真 listener |
+| `io.cancel_stops_a_pending_accept` | 裸 ring：accept 被 cancel 打断，cancel 返回 `true` |
+| `net.listen_tcp_reports_its_port` | `listen_tcp(0)` → `local_port` ≠ 0 |
+| `tcp.connect_and_echo` / `tcp.connect_refused` / `tcp.half_close_ends_the_stream` | 单 engine，accept/connect/recv/send 全走 awaiter |
+
+**实现顺序**
+
+1. `completion` 基类：`reap()` 不再认识具体 awaiter 类型（写 result → `running_io--` → `resume`）。
+2. 数据面：`rw_awaiter` 的 `kind` 扩到 4 值（read/write/recv/send），`send` 带 `MSG_NOSIGNAL`。
+3. `accept` / `connect`：`accept` 只返 fd；`connect` 收 `sockaddr_in`（IPv4），地址契约写进注释。
+4. `cancel`：`0` → `true`、`-ENOENT` → `false`、其它负值抛。
+5. `net/socket.*`：四个纯 syscall 助手（`>3` 个自由函数，按拆分规则拆 decl/impl）。
+6. demo：SIGINT → `cancel` → `stop()`。
+
+**完成标志**
+
+```
+$ ./build/bin/echo_server
+[listen] 127.0.0.1:7000
+[accept] fd 6
+[echo] 9 bytes
+[cancel] listener 3: canceled
+[stop] 8 loop iterations, running io: 0
+```
+
+（循环数随调度浮动，7 和 8 都见过；要认的是 `running io: 0`。）
+
+手动验收：`printf 'hello nc\n' | nc -N 127.0.0.1 7000` 回显后 Ctrl-C，进程干净退出。四棵树 ctest 全绿：default 66、asan 66、trace 68、gcc 66。
+
+**坑**
+
+- **`IORING_OP_WRITE` 在 socket 上会 SIGPIPE**：peer 已 RST 时 `res=-32` 且信号真的投递，SIG_DFL 下直接杀进程；`IORING_OP_SEND` 不产生信号。所以数据面另开 `send`/`recv`，`io::write` 的注释写明只给 pipe/文件（ADR-0007）。
+- **`stop()` 卡在 pending accept**：M11 的"等到 `running_io()==0`"在监听 fd 上永远等不到，必须 `io::cancel(fd)` 打断；accept 循环还要在每轮末尾看一眼中断标志，否则"连接落在信号与 cancel 之间"时会再 arm 一个没人能打断的 accept。
+- **cancel 的两个 CQE 都要收**：cancel 先（`0`）、目标后（`-ECANCELED`），漏收一个就少减一次 `running_io`。
+- **`-ENOENT` 是正常竞态**：cancel 返回它说明当时没有在飞 op，映射成 `false`，不要当异常。
+- **`prep_accept` 的 flags 只作用于新 socket**：它不会让 accept 变成非阻塞（本来也不阻塞），只是让新 fd 带上 `SOCK_NONBLOCK|SOCK_CLOEXEC`。
+- **`connect` 的地址在提交时被拷走**：延迟提交意味着地址要活到挂起期间；收 `sockaddr_in` 并在 awaiter 里做唯一一次 cast，是为了不把 `reinterpret_cast` 撒到每个调用点。
+- **IPv4 only**：`connect` 收 `sockaddr_in`；要 IPv6 时再加一个重载。
 
 ---
 

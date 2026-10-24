@@ -82,7 +82,7 @@ class completion {
 // One in-flight kernel op; it lives in the awaiting frame until reap() hands it a result.
 class [[LLCO_AWAIT_HINT]] rw_awaiter : public completion {
   public:
-    enum class kind { read, write, recv, send };
+    enum class Kind : std::uint8_t { Read, Write, Recv, Send };
 
   private:
     ring         *m_ring;
@@ -90,11 +90,11 @@ class [[LLCO_AWAIT_HINT]] rw_awaiter : public completion {
     unsigned      m_len;
     std::uint64_t m_offset;
     int           m_fd;
-    kind          m_kind;
+    Kind          m_kind;
 
   public:
     rw_awaiter(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset,
-               kind which) noexcept;
+               Kind which) noexcept;
     CLASS_NO_COPY_MOVE(rw_awaiter);
 
     auto await_ready() const noexcept -> bool;

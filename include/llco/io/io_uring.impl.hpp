@@ -88,7 +88,7 @@ inline auto ring::running_io() const noexcept -> unsigned {
 }
 
 inline rw_awaiter::rw_awaiter(ring &owner, int fd, std::span<std::byte> buffer,
-                              std::uint64_t offset, kind which) noexcept
+                              std::uint64_t offset, Kind which) noexcept
     : m_ring{&owner}, m_buffer{buffer.data()}, m_len{static_cast<unsigned>(buffer.size())},
       m_offset{offset}, m_fd{fd}, m_kind{which} {}
 
@@ -104,16 +104,16 @@ inline void completion::armed(ring &owner, std::coroutine_handle<> caller) noexc
 inline void rw_awaiter::await_suspend(std::coroutine_handle<> handle) {
     auto *sqe = m_ring->next_sqe();
     switch (m_kind) {
-    case kind::read:
+    case Kind::Read:
         ::io_uring_prep_read(sqe, m_fd, m_buffer, m_len, m_offset);
         break;
-    case kind::write:
+    case Kind::Write:
         ::io_uring_prep_write(sqe, m_fd, m_buffer, m_len, m_offset);
         break;
-    case kind::recv:
+    case Kind::Recv:
         ::io_uring_prep_recv(sqe, m_fd, m_buffer, m_len, 0);
         break;
-    case kind::send:
+    case Kind::Send:
         ::io_uring_prep_send(sqe, m_fd, m_buffer, m_len, MSG_NOSIGNAL);
         break;
     }
@@ -129,20 +129,20 @@ inline auto rw_awaiter::await_resume() const -> std::size_t {
 
 inline auto read(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset)
     -> rw_awaiter {
-    return {owner, fd, buffer, offset, rw_awaiter::kind::read};
+    return {owner, fd, buffer, offset, rw_awaiter::Kind::Read};
 }
 
 inline auto write(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset)
     -> rw_awaiter {
-    return {owner, fd, buffer, offset, rw_awaiter::kind::write};
+    return {owner, fd, buffer, offset, rw_awaiter::Kind::Write};
 }
 
 inline auto recv(ring &owner, int fd, std::span<std::byte> buffer) -> rw_awaiter {
-    return {owner, fd, buffer, 0, rw_awaiter::kind::recv};
+    return {owner, fd, buffer, 0, rw_awaiter::Kind::Recv};
 }
 
 inline auto send(ring &owner, int fd, std::span<std::byte> buffer) -> rw_awaiter {
-    return {owner, fd, buffer, 0, rw_awaiter::kind::send};
+    return {owner, fd, buffer, 0, rw_awaiter::Kind::Send};
 }
 
 inline accept_awaiter::accept_awaiter(ring &owner, int listener) noexcept

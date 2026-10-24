@@ -84,6 +84,11 @@ inline auto rw_awaiter::await_ready() const noexcept -> bool {
 inline void rw_awaiter::await_suspend(std::coroutine_handle<> handle) {
     m_handle = handle;
     auto *sqe = m_ring->sqe();
+    // A full queue hands the batch over early; the loop still submits what is left.
+    while (sqe == nullptr) {
+        m_ring->submit();
+        sqe = m_ring->sqe();
+    }
     if (m_write)
         ::io_uring_prep_write(sqe, m_fd, m_buffer, m_len, m_offset);
     else

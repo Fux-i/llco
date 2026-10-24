@@ -214,6 +214,34 @@ TEST(io, failed_op_propagates_negative_errno) {
     EXPECT_EQ(r.running_io(), 0U);
 }
 
+TEST(io, sq_full_flushes_and_retries) {
+    io::ring r{2}; // two SQEs: arming a third op must flush the queue first
+    std::array<std::array<int, 2>, 3>        fds{};
+    std::array<std::array<std::byte, 1>, 3> buffers{};
+    for (auto &pair : fds)
+        ASSERT_EQ(::pipe(pair.data()), 0);
+
+    auto first  = read_once(r, fds[0][0], buffers[0]);
+    auto second = read_once(r, fds[1][0], buffers[1]);
+    auto third  = read_once(r, fds[2][0], buffers[2]);
+    first.resume();
+    second.resume();
+    third.resume(); // the queue is full here
+    EXPECT_EQ(r.sq_pending(), 1U) << "the full queue was not flushed before taking a new slot";
+    EXPECT_EQ(r.running_io(), 3U);
+    r.submit();
+    for (auto &pair : fds)
+        ASSERT_EQ(::write(pair[1], "x", 1), 1);
+
+    while (!first.handle().done())
+        r.reap();
+    while (!second.handle().done())
+        r.reap();
+    while (!third.handle().done())
+        r.reap();
+    EXPECT_EQ(r.running_io(), 0U);
+}
+
 TEST(io, write_puts_bytes_into_the_pipe) {
     io::ring           r;
     std::array<int, 2> fds{};

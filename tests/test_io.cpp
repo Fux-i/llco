@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <llco/net/socket.decl.hpp>
 #include <llco/runtime/engine.decl.hpp>
 #include <llco/io/io_uring.decl.hpp>
 #include <llco/core/task.hpp>
@@ -17,6 +18,7 @@
 #include <thread>
 
 #include <liburing.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -89,6 +91,26 @@ task<std::size_t> recv_once(io::ring *r, int fd, std::span<std::byte> buffer) {
 task<> send_once(io::ring *r, int fd, std::span<std::byte> buffer) {
     (void)co_await io::send(*r, fd, buffer);
     co_return;
+}
+
+task<int> accept_once(io::ring *r, int listener) {
+    co_return co_await io::accept(*r, listener);
+}
+
+task<> connect_once(io::ring *r, int fd, ::sockaddr_in address) {
+    co_await io::connect(*r, fd, address);
+}
+
+// A plain blocking client for the accept case; connect has its own async test below.
+auto connect_blocking(std::uint16_t port) -> int {
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0)
+        throw std::system_error{errno, std::system_category(), "socket"};
+    const auto address = net::loopback(port);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): sockaddr_in is a sockaddr
+    if (::connect(fd, reinterpret_cast<const ::sockaddr *>(&address), sizeof address) != 0)
+        throw std::system_error{errno, std::system_category(), "connect"};
+    return fd;
 }
 
 } // namespace
@@ -349,6 +371,47 @@ TEST(io, stop_waits_for_running_io) {
     EXPECT_GE(elapsed, WRITER_DELAY / 2) << "stop() returned before the op completed";
     EXPECT_TRUE(read_done.load()) << "stop() dropped the work it was waiting for";
     EXPECT_EQ(e.ring().running_io(), 0U);
+}
+
+TEST(io, accept_returns_a_socket) {
+    io::ring  r;
+    const int listener = net::listen_tcp(0);
+
+    auto t = accept_once(&r, listener);
+    t.resume();
+    EXPECT_EQ(r.running_io(), 1U);
+    r.submit();
+    EXPECT_EQ(r.reap(), 0U) << "the accept completed before a client arrived";
+
+    const int client = connect_blocking(net::local_port(listener));
+    while (!t.handle().done())
+        r.reap();
+    EXPECT_GE(t.result(), 0) << "the accept did not hand back a socket";
+    EXPECT_EQ(r.running_io(), 0U);
+    ::close(t.result());
+    ::close(client);
+    ::close(listener);
+}
+
+TEST(io, connect_reaches_a_listener) {
+    io::ring  r;
+    const int listener = net::listen_tcp(0);
+    const int fd       = net::tcp_socket();
+
+    auto t = connect_once(&r, fd, net::loopback(net::local_port(listener)));
+    t.resume();
+    EXPECT_EQ(r.running_io(), 1U);
+    r.submit();
+    while (!t.handle().done())
+        r.reap();
+
+    EXPECT_NO_THROW(t.result());
+    const int accepted = ::accept(listener, nullptr, nullptr);
+    EXPECT_GE(accepted, 0) << "the listener never saw the connection";
+    ::close(accepted);
+    ::close(fd);
+    ::close(listener);
+    EXPECT_EQ(r.running_io(), 0U);
 }
 
 TEST(io, engine_dispatches_completion) {

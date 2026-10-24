@@ -37,6 +37,15 @@ inline auto ring::sqe() -> ::io_uring_sqe * {
     return ::io_uring_get_sqe(&m_ring);
 }
 
+inline auto ring::next_sqe() -> ::io_uring_sqe * {
+    auto *sqe = ::io_uring_get_sqe(&m_ring);
+    while (sqe == nullptr) { // the queue is full: hand the batch over and take a new slot
+        submit();
+        sqe = ::io_uring_get_sqe(&m_ring);
+    }
+    return sqe;
+}
+
 inline void ring::submit() {
     const int rc = ::io_uring_submit(&m_ring);
     if (rc < 0)
@@ -92,12 +101,7 @@ inline void completion::armed(ring &owner, std::coroutine_handle<> caller) noexc
 }
 
 inline void rw_awaiter::await_suspend(std::coroutine_handle<> handle) {
-    auto *sqe = m_ring->sqe();
-    // A full queue hands the batch over early; the loop still submits what is left.
-    while (sqe == nullptr) {
-        m_ring->submit();
-        sqe = m_ring->sqe();
-    }
+    auto *sqe = m_ring->next_sqe();
     switch (m_kind) {
     case kind::read:
         ::io_uring_prep_read(sqe, m_fd, m_buffer, m_len, m_offset);
@@ -138,6 +142,55 @@ inline auto recv(ring &owner, int fd, std::span<std::byte> buffer) -> rw_awaiter
 
 inline auto send(ring &owner, int fd, std::span<std::byte> buffer) -> rw_awaiter {
     return {owner, fd, buffer, 0, rw_awaiter::kind::send};
+}
+
+inline accept_awaiter::accept_awaiter(ring &owner, int listener) noexcept
+    : m_ring{&owner}, m_listener{listener} {}
+
+inline auto accept_awaiter::await_ready() const noexcept -> bool {
+    return false;
+}
+
+inline void accept_awaiter::await_suspend(std::coroutine_handle<> handle) {
+    auto *sqe = m_ring->next_sqe();
+    ::io_uring_prep_accept(sqe, m_listener, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
+    ::io_uring_sqe_set_data(sqe, static_cast<completion *>(this));
+    armed(*m_ring, handle);
+}
+
+inline auto accept_awaiter::await_resume() const -> int {
+    if (m_result < 0)
+        throw std::system_error{-m_result, std::system_category(), "io_uring accept"};
+    return m_result;
+}
+
+inline connect_awaiter::connect_awaiter(ring &owner, int fd, const ::sockaddr_in &address) noexcept
+    : m_ring{&owner}, m_fd{fd}, m_address{&address} {}
+
+inline auto connect_awaiter::await_ready() const noexcept -> bool {
+    return false;
+}
+
+inline void connect_awaiter::await_suspend(std::coroutine_handle<> handle) {
+    auto *sqe = m_ring->next_sqe();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): sockaddr_in is a sockaddr
+    ::io_uring_prep_connect(sqe, m_fd, reinterpret_cast<const ::sockaddr *>(m_address),
+                            sizeof *m_address);
+    ::io_uring_sqe_set_data(sqe, static_cast<completion *>(this));
+    armed(*m_ring, handle);
+}
+
+inline void connect_awaiter::await_resume() const {
+    if (m_result < 0)
+        throw std::system_error{-m_result, std::system_category(), "io_uring connect"};
+}
+
+inline auto accept(ring &owner, int listener) -> accept_awaiter {
+    return {owner, listener};
+}
+
+inline auto connect(ring &owner, int fd, const ::sockaddr_in &address) -> connect_awaiter {
+    return {owner, fd, address};
 }
 
 inline auto to_kernel_time(std::chrono::nanoseconds timeout) noexcept -> __kernel_timespec {

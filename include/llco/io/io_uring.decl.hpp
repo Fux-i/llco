@@ -59,20 +59,30 @@ class ring {
     // Ops armed but not home yet, submitted or not; readable from any thread.
     auto running_io() const noexcept -> unsigned;
 
-    friend class rw_awaiter;
+    friend class completion;
+};
+
+// What reap() hands a kernel result to: the frame to resume and the result itself.
+class completion {
+  protected:
+    std::coroutine_handle<> m_handle = nullptr;
+    int                     m_result{};
+
+    // Counts the op on its ring and remembers the frame; reap() does the reverse.
+    void armed(ring &owner, std::coroutine_handle<> caller) noexcept;
+
+    friend class ring;
 };
 
 // One in-flight kernel op; it lives in the awaiting frame until reap() hands it a result.
-class [[LLCO_AWAIT_HINT]] rw_awaiter {
+class [[LLCO_AWAIT_HINT]] rw_awaiter : public completion {
   private:
-    ring                   *m_ring;
-    std::coroutine_handle<> m_handle = nullptr; // armed in await_suspend
-    std::byte              *m_buffer;
-    unsigned                m_len;
-    std::uint64_t           m_offset;
-    int                     m_fd;
-    bool                    m_write;
-    int                     m_result{};
+    ring         *m_ring;
+    std::byte    *m_buffer;
+    unsigned      m_len;
+    std::uint64_t m_offset;
+    int           m_fd;
+    bool          m_write;
 
   public:
     rw_awaiter(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset,
@@ -86,12 +96,6 @@ class [[LLCO_AWAIT_HINT]] rw_awaiter {
 
     // Bytes transferred; a negative result is rethrown as std::system_error.
     auto await_resume() const -> std::size_t;
-
-  private:
-    // Runs on the ring thread inside reap(), before the awaiting frame continues.
-    void complete(int result) noexcept;
-
-    friend class ring;
 };
 
 // Reads into buffer; it must be co_awaited on the ring's owner thread.

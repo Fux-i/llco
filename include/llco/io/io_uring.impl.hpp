@@ -54,10 +54,13 @@ inline auto ring::reap() -> std::size_t {
     std::size_t     seen = 0;
     while (::io_uring_peek_cqe(&m_ring, &cqe) == 0) {
         const int result = cqe->res;
-        auto     *op     = static_cast<rw_awaiter *>(::io_uring_cqe_get_data(cqe));
+        auto     *op     = static_cast<completion *>(::io_uring_cqe_get_data(cqe));
         ::io_uring_cqe_seen(&m_ring, cqe); // before resuming: the frame may be gone afterwards
-        if (op != nullptr)
-            op->complete(result);
+        if (op != nullptr) {
+            op->m_result = result;
+            m_running_io.fetch_sub(1, std::memory_order_relaxed);
+            op->m_handle.resume();
+        }
         ++seen;
     }
     m_completions.fetch_add(seen, std::memory_order_relaxed);
@@ -81,8 +84,12 @@ inline auto rw_awaiter::await_ready() const noexcept -> bool {
     return false;
 }
 
+inline void completion::armed(ring &owner, std::coroutine_handle<> caller) noexcept {
+    m_handle = caller;
+    owner.m_running_io.fetch_add(1, std::memory_order_relaxed);
+}
+
 inline void rw_awaiter::await_suspend(std::coroutine_handle<> handle) {
-    m_handle = handle;
     auto *sqe = m_ring->sqe();
     // A full queue hands the batch over early; the loop still submits what is left.
     while (sqe == nullptr) {
@@ -93,20 +100,14 @@ inline void rw_awaiter::await_suspend(std::coroutine_handle<> handle) {
         ::io_uring_prep_write(sqe, m_fd, m_buffer, m_len, m_offset);
     else
         ::io_uring_prep_read(sqe, m_fd, m_buffer, m_len, m_offset);
-    ::io_uring_sqe_set_data(sqe, this);
-    m_ring->m_running_io.fetch_add(1, std::memory_order_relaxed);
+    ::io_uring_sqe_set_data(sqe, static_cast<completion *>(this));
+    armed(*m_ring, handle);
 }
 
 inline auto rw_awaiter::await_resume() const -> std::size_t {
     if (m_result < 0)
         throw std::system_error{-m_result, std::system_category(), "io_uring op"};
     return static_cast<std::size_t>(m_result);
-}
-
-inline void rw_awaiter::complete(int result) noexcept {
-    m_result = result;
-    m_ring->m_running_io.fetch_sub(1, std::memory_order_relaxed);
-    m_handle.resume();
 }
 
 inline auto read(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset)

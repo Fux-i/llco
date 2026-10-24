@@ -97,7 +97,7 @@ inline void rw_awaiter::await_suspend(std::coroutine_handle<> handle) {
     m_ring->m_running_io.fetch_add(1, std::memory_order_relaxed);
 }
 
-inline auto rw_awaiter::await_resume() -> std::size_t {
+inline auto rw_awaiter::await_resume() const -> std::size_t {
     if (m_result < 0)
         throw std::system_error{-m_result, std::system_category(), "io_uring op"};
     return static_cast<std::size_t>(m_result);

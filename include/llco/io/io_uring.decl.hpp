@@ -34,7 +34,8 @@ class ring {
     // A ring takes one registration at a time; release it before the fd closes.
     void unregister_eventfd();
 
-    // Prepares one SQE; nothing reaches the kernel before submit().
+    // Prepares one SQE, or nullptr when the queue is full; nothing reaches the kernel before
+    // submit(). Raw ops must clear user_data themselves (set_data(sqe, nullptr)).
     [[LLCO_DISCARD_HINT]]
     auto sqe() -> ::io_uring_sqe *;
 
@@ -48,7 +49,8 @@ class ring {
     [[LLCO_DISCARD_HINT]]
     auto sq_pending() const noexcept -> unsigned;
 
-    // Hands every reported completion back to the kernel; returns how many were seen.
+    // Dispatches every completion to its awaiter (user_data == nullptr means a raw op) and hands
+    // it back to the kernel; returns how many were seen.
     auto reap() -> std::size_t;
 
     // Completions reaped so far; readable from any thread.
@@ -64,7 +66,7 @@ class ring {
 class [[LLCO_AWAIT_HINT]] rw_awaiter {
   private:
     ring                   *m_ring;
-    std::coroutine_handle<> m_handle{};
+    std::coroutine_handle<> m_handle = nullptr; // armed in await_suspend
     std::byte              *m_buffer;
     unsigned                m_len;
     std::uint64_t           m_offset;
@@ -83,7 +85,7 @@ class [[LLCO_AWAIT_HINT]] rw_awaiter {
     void await_suspend(std::coroutine_handle<> handle);
 
     // Bytes transferred; a negative result is rethrown as std::system_error.
-    auto await_resume() -> std::size_t;
+    auto await_resume() const -> std::size_t;
 
   private:
     // Runs on the ring thread inside reap(), before the awaiting frame continues.

@@ -66,8 +66,8 @@ auto wait_for_completions(engine &e, std::size_t expected) -> bool {
 constexpr std::string_view PAYLOAD = "hello";
 
 // A bare ring needs no engine: resume() arms the op, submit() hands it over, reap() completes it.
-task<std::size_t> read_once(io::ring &r, int fd, std::span<std::byte> buffer) {
-    co_return co_await io::read(r, fd, buffer);
+task<std::size_t> read_once(io::ring *r, int fd, std::span<std::byte> buffer) {
+    co_return co_await io::read(*r, fd, buffer);
 }
 
 task<> read_into(engine *e, int fd, std::span<std::byte> buffer, std::atomic<bool> *done) {
@@ -75,8 +75,8 @@ task<> read_into(engine *e, int fd, std::span<std::byte> buffer, std::atomic<boo
     done->store(true);
 }
 
-task<> write_once(io::ring &r, int fd, std::span<std::byte> buffer) {
-    (void)co_await io::write(r, fd, buffer);
+task<> write_once(io::ring *r, int fd, std::span<std::byte> buffer) {
+    (void)co_await io::write(*r, fd, buffer);
     co_return;
 }
 
@@ -153,7 +153,7 @@ TEST(io, read_completes_with_bytes) {
     ASSERT_EQ(::pipe(fds.data()), 0);
     std::array<std::byte, PAYLOAD.size()> buffer{};
 
-    auto t = read_once(r, fds[0], buffer);
+    auto t = read_once(&r, fds[0], buffer);
     t.resume();
     EXPECT_EQ(r.running_io(), 1U) << "arming did not count the op";
     r.submit();
@@ -176,8 +176,8 @@ TEST(io, read_wakes_only_the_right_coroutine) {
     std::array<std::byte, 1> first_buffer{};
     std::array<std::byte, 1> second_buffer{};
 
-    auto a = read_once(r, first[0], first_buffer);
-    auto b = read_once(r, second[0], second_buffer);
+    auto a = read_once(&r, first[0], first_buffer);
+    auto b = read_once(&r, second[0], second_buffer);
     a.resume();
     b.resume();
     EXPECT_EQ(r.running_io(), 2U);
@@ -200,7 +200,7 @@ TEST(io, failed_op_propagates_negative_errno) {
     ASSERT_EQ(::pipe(fds.data()), 0);
     std::array<std::byte, 1> buffer{};
 
-    auto t = read_once(r, fds[1], buffer); // the write end refuses reads
+    auto t = read_once(&r, fds[1], buffer); // the write end refuses reads
     t.resume();
     r.submit();
     while (!t.handle().done())
@@ -224,9 +224,9 @@ TEST(io, sq_full_flushes_and_retries) {
     for (auto &pair : fds)
         ASSERT_EQ(::pipe(pair.data()), 0);
 
-    auto first  = read_once(r, fds[0][0], buffers[0]);
-    auto second = read_once(r, fds[1][0], buffers[1]);
-    auto third  = read_once(r, fds[2][0], buffers[2]);
+    auto first  = read_once(&r, fds[0][0], buffers[0]);
+    auto second = read_once(&r, fds[1][0], buffers[1]);
+    auto third  = read_once(&r, fds[2][0], buffers[2]);
     first.resume();
     second.resume();
     third.resume(); // the queue is full here
@@ -252,7 +252,7 @@ TEST(io, write_puts_bytes_into_the_pipe) {
     std::array<char, PAYLOAD.size()> payload{};
     std::ranges::copy(PAYLOAD, payload.begin());
 
-    auto t = write_once(r, fds[1], std::as_writable_bytes(std::span{payload}));
+    auto t = write_once(&r, fds[1], std::as_writable_bytes(std::span{payload}));
     t.resume();
     r.submit();
     while (!t.handle().done())
@@ -278,7 +278,7 @@ TEST(io, stop_waits_for_running_io) {
     ASSERT_TRUE(wait_until([&] { return e.ring().running_io() == 1; }))
         << "the read never reached the ring";
 
-    std::jthread writer{[fd = fds[1]] {
+    const std::jthread writer{[fd = fds[1]] {
         std::this_thread::sleep_for(WRITER_DELAY);
         const char byte = 'x';
         (void)::write(fd, &byte, 1); // arrives after stop() has begun

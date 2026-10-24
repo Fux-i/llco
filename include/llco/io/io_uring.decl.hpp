@@ -145,6 +145,25 @@ class [[LLCO_AWAIT_HINT]] connect_awaiter : public completion {
     void await_resume() const;
 };
 
+// One cancellation request for whatever is in flight on a descriptor.
+class [[LLCO_AWAIT_HINT]] cancel_awaiter : public completion {
+  private:
+    ring *m_ring;
+    int   m_fd;
+
+  public:
+    cancel_awaiter(ring &owner, int fd) noexcept;
+    CLASS_NO_COPY_MOVE(cancel_awaiter);
+
+    auto await_ready() const noexcept -> bool;
+
+    // Arms the cancel but leaves the submit to the loop.
+    void await_suspend(std::coroutine_handle<> handle);
+
+    // True when something was cancelled; false when nothing was in flight, which is not an error.
+    auto await_resume() const -> bool;
+};
+
 // Reads into buffer; it must be co_awaited on the ring's owner thread.
 auto read(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset = 0) -> rw_awaiter;
 
@@ -162,6 +181,9 @@ auto accept(ring &owner, int listener) -> accept_awaiter;
 
 // Connects to a loopback address; IPv4 only, because the address is a sockaddr_in.
 auto connect(ring &owner, int fd, const ::sockaddr_in &address) -> connect_awaiter;
+
+// Cancels every op in flight on fd; the cancelled op itself completes with ECANCELED.
+auto cancel(ring &owner, int fd) -> cancel_awaiter;
 
 // Deadline in the form a timeout op expects; it must outlive the op.
 inline auto to_kernel_time(std::chrono::nanoseconds timeout) noexcept -> __kernel_timespec;

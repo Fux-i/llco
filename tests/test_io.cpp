@@ -97,6 +97,10 @@ task<int> accept_once(io::ring *r, int listener) {
     co_return co_await io::accept(*r, listener);
 }
 
+task<bool> cancel_once(io::ring *r, int fd) {
+    co_return co_await io::cancel(*r, fd);
+}
+
 task<> connect_once(io::ring *r, int fd, ::sockaddr_in address) {
     co_await io::connect(*r, fd, address);
 }
@@ -412,6 +416,33 @@ TEST(io, connect_reaches_a_listener) {
     ::close(fd);
     ::close(listener);
     EXPECT_EQ(r.running_io(), 0U);
+}
+
+TEST(io, cancel_stops_a_pending_accept) {
+    io::ring  r;
+    const int listener = net::listen_tcp(0);
+
+    auto pending = accept_once(&r, listener);
+    pending.resume();
+    r.submit(); // the accept is in the kernel now
+
+    auto canceller = cancel_once(&r, listener);
+    canceller.resume();
+    r.submit();
+    while (!pending.handle().done() || !canceller.handle().done())
+        r.reap();
+
+    EXPECT_TRUE(canceller.result()) << "the cancel found nothing to cancel";
+    auto raised = false;
+    try {
+        (void)pending.result();
+    } catch (const std::system_error &error) {
+        raised = true;
+        EXPECT_EQ(error.code().value(), ECANCELED);
+    }
+    EXPECT_TRUE(raised) << "the cancelled accept did not raise";
+    EXPECT_EQ(r.running_io(), 0U);
+    ::close(listener);
 }
 
 TEST(io, engine_dispatches_completion) {

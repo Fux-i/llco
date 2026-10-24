@@ -2,6 +2,7 @@
 
 #include <llco/io/io_uring.decl.hpp>
 
+#include <cerrno>
 #include <chrono>
 #include <cstddef>
 #include <system_error>
@@ -185,12 +186,37 @@ inline void connect_awaiter::await_resume() const {
         throw std::system_error{-m_result, std::system_category(), "io_uring connect"};
 }
 
+inline cancel_awaiter::cancel_awaiter(ring &owner, int fd) noexcept : m_ring{&owner}, m_fd{fd} {}
+
+inline auto cancel_awaiter::await_ready() const noexcept -> bool {
+    return false;
+}
+
+inline void cancel_awaiter::await_suspend(std::coroutine_handle<> handle) {
+    auto *sqe = m_ring->next_sqe();
+    ::io_uring_prep_cancel_fd(sqe, m_fd, 0);
+    ::io_uring_sqe_set_data(sqe, static_cast<completion *>(this));
+    armed(*m_ring, handle);
+}
+
+inline auto cancel_awaiter::await_resume() const -> bool {
+    if (m_result == 0)
+        return true;
+    if (m_result == -ENOENT)
+        return false;
+    throw std::system_error{-m_result, std::system_category(), "io_uring cancel"};
+}
+
 inline auto accept(ring &owner, int listener) -> accept_awaiter {
     return {owner, listener};
 }
 
 inline auto connect(ring &owner, int fd, const ::sockaddr_in &address) -> connect_awaiter {
     return {owner, fd, address};
+}
+
+inline auto cancel(ring &owner, int fd) -> cancel_awaiter {
+    return {owner, fd};
 }
 
 inline auto to_kernel_time(std::chrono::nanoseconds timeout) noexcept -> __kernel_timespec {

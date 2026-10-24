@@ -78,16 +78,16 @@ _Avoid_: throttling
 
 ## 同步
 
-**latch**:
-倒计数归零后释放所有等待者的同步原语，是本项目其他"等一等"的基元。
-_Avoid_: counter, barrier
-
 **event**:
-置位后永久通过、广播所有等待者的一次性信号。
+一次性广播原语：`set` 之后所有等待者恢复，各自拿到一份值的拷贝；同步层的基元。
 _Avoid_: condition variable, flag
 
+**latch**:
+计数 + event：归零时 set 一次，唤醒所有等待者。
+_Avoid_: counter, barrier
+
 **when_all / when_any**:
-由 latch 组合出的"等全部完成 / 等任意一个完成"。
+用 latch / event 写的组合配方，不是组件；when_any 的 event 必须共享（掉队任务还会引用它）。
 _Avoid_: join, race
 
 ## 可观测性与 IO

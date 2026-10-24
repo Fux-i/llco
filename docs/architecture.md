@@ -35,6 +35,7 @@ flowchart TB
 
 - `engine` 认识 queue、io_uring、trace 和 `task`（只为 `spawn`），**不认识** scheduler。
 - `scheduler` 认识 engine，**不认识** task 的内部。
+- `sync`（event / latch）认识 engine：挂起时记下 `current_engine()`，唤醒时 `try_add` 回那个 engine；不认识 scheduler。
 - `task` 不认识 engine；唯一需要 engine 的地方是 `co_await resume_on(e)`，它只依赖一个最小概念（见下），不依赖 engine 类型。
 - `io_uring` 只在 engine 内部使用，不泄漏到 task 层。
 
@@ -100,6 +101,29 @@ M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `r
 - 跨 engine 接力仍走 M3 的 `resume_on`：目标 engine 只是另一个满足 `Executor` 的对象。trace 里每个 engine 线程把自己的泳道命名为 `engine-i`，接力表现为同一条 `resume` 切片出现在另一条泳道上；不做 flow 箭头，因为 `resume_on` 的 `await_suspend` 只拿到类型擦除的句柄，够不到 promise（见 `docs/ig_/M8`）。
 - 泳道命名整段包在 `#if LLCO_TRACE` 里：默认构建没有 `m_lane` 成员、没有 `set_lane`、循环里也没有那一行。
 
+## 同步原语与组合配方
+
+- **`event<T>` 是唯一的基元**：一次性、广播。`set` 之前 `wait` 挂起；`set` 之后所有等待者恢复，各自拿到一份值的拷贝。等待者是侵入式 `next` 栈上的节点，活在协程帧里，不额外分配。
+- **`latch` = 计数 + `event<void>`**：`count_down()` 归零时 `set()` 一次。
+- **唤醒落点**：awaiter 在挂起时记下 `current_engine()`；`set()` 一律 `try_add` 回那个 engine（同 engine 也不内联，`set` 的栈上不跑用户代码），没有归属的协程（`sync_wait` 的 root、manual engine）才内联恢复。因此同步原语跨 engine 安全，代价是一次队列往返；队列满时按 ADR-0004 回退内联。
+- **`when_all` / `when_any` 不是组件，是配方**：
+
+```cpp
+// when_all：latch 计数
+latch done{n};
+for (std::size_t i = 0; i < n; ++i)
+    s.submit(work(i, &out[i], &done));   // 子任务最后一行 done.count_down()
+co_await done.wait();
+
+// when_any：event 必须共享，掉队任务还会引用它
+auto first = std::make_shared<event<int>>();
+for (std::size_t i = 0; i < n; ++i)
+    s.submit(probe(i, first));           // 子任务结束前 first->set(i)
+const int winner = co_await first->wait();
+```
+
+不做组合器的理由：`when_all` 只是 latch 的三行样板，factory 形态还会限制"子任务由别人提交"的场景；`when_any` 的难点是共享状态寿命，做成组件反而把"剩余任务还在跑"藏起来。等以后有取消机制，`when_any` 才有"取消掉队者"的实质工作，那时再考虑组件化。
+
 ## 文件布局约定
 
 `include/llco/` 按层分目录，纯 header-only（**没有 `src/`**，CMake 里 `llco` 是 INTERFACE 库）：
@@ -111,7 +135,7 @@ include/llco/
   concepts/ executor.hpp                  # 只放 concept
   core/     task.hpp  resume_on.hpp       # 模板，单文件
   runtime/  queue.*  engine.*  scheduler.*
-  sync/     sync_wait.hpp                 # M10: latch / when_all / when_any / event
+  sync/     event.hpp  latch.hpp  sync_wait.hpp   # 基元 + 阻塞点；组合配方写在文档里
   trace/    trace.*
   io/       io_uring.*                    # M12 另开 net/
 ```

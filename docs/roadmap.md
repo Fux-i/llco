@@ -342,29 +342,36 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 ---
 
-## M10 · 同步原语
+## M10 · 同步原语（event + latch）
 
-**目标**：latch → when_all / when_any → event。
+**目标**：两个基元 + 组合配方。`event<T>`（一次性广播 + 值）与 `latch`（计数归零广播）；`when_all` / `when_any` 降级为文档里的配方，**不做组件**。
 
-**改动**：`sync/latch.decl/impl.hpp`、`sync/when_all.decl/impl.hpp`、`sync/when_any.decl/impl.hpp`、`sync/event.decl/impl.hpp`、测试。
+**改动**：`sync/event.hpp`、`sync/latch.hpp`、`runtime/engine`（`current_engine()`）、`tests/test_event.cpp`、`tests/test_latch.cpp`、`examples/fanout.cpp`、伞头文件、GLOSSARY / architecture / 本文件。
 
 **先写的失败测试**
 
-- `latch.blocks_until_zero`、`latch.cross_engine_countdown`
-- `when_all.waits_for_all_children_concurrently`（断言总耗时接近最长者，而不是之和）
-- `when_any.resumes_on_first_completion`
-- `event.broadcasts_to_all_waiters`
+- `event.wakes_a_waiter`、`event.set_before_wait_completes_immediately`、`event.value_reaches_the_waiter`、`event.broadcasts_to_every_waiter`、`event.set_posts_even_on_the_same_engine`、`event.wakes_a_waiter_on_its_own_engine`、`event.wakes_a_sync_wait_root`
+- `latch.blocks_until_zero`、`latch.zero_count_is_ready`、`latch.cross_engine_countdown`、`latch.fan_out_runs_concurrently`
+- `engine.current_engine_is_null_on_a_manual_engine`、`threaded_engine.current_engine_is_visible_inside_a_task`
 
 **实现顺序**
 
-1. `latch`：原子计数 + 等待者句柄集合；归零时逐个 resume。**它是所有"等一等"的基元。**
-2. `when_all`：先启动全部子任务（每个都 `resume_on`），再用 latch 等齐。
-3. `when_any`：第一个完成者触发父协程，其余结果先丢弃（取消留到以后）。
-4. `event` = 一次性广播（本质是 latch(1)）。
+1. `current_engine()`：`engine::loop` 里写 thread_local；manual engine 与调用线程返回 `nullptr`。
+2. `event<T>`：等待者是侵入式 `next` 栈上的节点；`await_suspend` 的 CAS 与 `set()` 的 exchange 抢同一个 head（哨兵节点表示已置位）。发布后的节点只能由 `set()` 唤醒；有 engine 就 `try_add` 投递，没有归属才内联恢复。
+3. `latch`：`atomic<size_t>` + `event<void>`，归零时 `set()`。
+4. 配方：`when_all` = latch；`when_any` = `shared_ptr<event<T>>`（见 architecture 的"同步原语与组合配方"）。
+5. demo：8 个子任务 fan-out / fan-in。
 
-**完成标志**：一个 fan-out/fan-in demo：父任务启动 8 个子任务，`when_all` 等齐后汇总打印。
+**完成标志**：`./build/bin/fanout` 打印 8 个 20 ms 子任务总耗时 ≈ 20–25 ms（串行是 160 ms）；四棵树 ctest 全绿（default 50、asan 50、trace 52、gcc 50）；lint 干净。
 
-**坑**：`when_all` **不能**写成顺序 `co_await a; co_await b;`（那是串行）；等待者集合先用 `std::vector` + mutex，性能留给 bench 之后再动。
+**坑**
+
+- **侵入式等待者栈的两个陷阱**：已发布的节点绝不能让 waiter 自己继续，否则 `set()` 会二次唤醒并触碰可能已销毁的节点；`set()` 遍历时先读 `next` 再唤醒。（讨论时我把它说成"丢唤醒"，写复现时发现按 store-before-exchange + acquire/release 的顺序丢唤醒其实不成立——真正的问题是双重 resume / UAF，详见 `docs/ig_/M10`。）
+- **`set()` 一律投递，同 engine 也不内联**：否则 `set` 的调用栈里会跑任意用户代码，测试也无法确定性断言"是否投递"。
+- **没有 engine 归属的协程只能内联恢复**：`sync_wait` 的 root 与 manual engine 驱动的协程都是这种；代价是"被唤醒的代码可能跑在 setter 的线程上"。
+- **重复 `set` 必须忽略**：用单独的 setter 标志抢"唯一 setter"身份，避免第二个 `set` 覆盖值。
+- **`latch::count_down` 超过构造计数会让 `size_t` 下溢**：这是调用方契约，不做运行时检查。
+- **不做 when_all / when_any**：它们只是配方；等有了取消机制，`when_any` 才有"取消掉队者"的实质工作，那时再组件化。
 
 ---
 

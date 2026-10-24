@@ -17,6 +17,8 @@
 #include <thread>
 
 #include <liburing.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 using namespace llco;
 using namespace std::chrono_literals;
@@ -77,6 +79,15 @@ task<> read_into(engine *e, int fd, std::span<std::byte> buffer, std::atomic<boo
 
 task<> write_once(io::ring *r, int fd, std::span<std::byte> buffer) {
     (void)co_await io::write(*r, fd, buffer);
+    co_return;
+}
+
+task<std::size_t> recv_once(io::ring *r, int fd, std::span<std::byte> buffer) {
+    co_return co_await io::recv(*r, fd, buffer);
+}
+
+task<> send_once(io::ring *r, int fd, std::span<std::byte> buffer) {
+    (void)co_await io::send(*r, fd, buffer);
     co_return;
 }
 
@@ -242,6 +253,54 @@ TEST(io, sq_full_flushes_and_retries) {
         r.reap();
     while (!third.handle().done())
         r.reap();
+    EXPECT_EQ(r.running_io(), 0U);
+}
+
+TEST(io, send_writes_to_the_peer) {
+    io::ring           r;
+    std::array<int, 2> fds{};
+    ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds.data()), 0);
+    std::array<char, PAYLOAD.size()> payload{};
+    std::ranges::copy(PAYLOAD, payload.begin());
+
+    auto t = send_once(&r, fds[0], std::as_writable_bytes(std::span{payload}));
+    t.resume();
+    r.submit();
+    while (!t.handle().done())
+        r.reap();
+
+    std::array<char, PAYLOAD.size()> received{};
+    ASSERT_EQ(::read(fds[1], received.data(), received.size()),
+              static_cast<ssize_t>(received.size()));
+    const std::string_view back{received.data(), received.size()};
+    EXPECT_EQ(back, PAYLOAD);
+    EXPECT_EQ(r.running_io(), 0U);
+}
+
+TEST(io, recv_returns_zero_at_eof) {
+    io::ring           r;
+    std::array<int, 2> fds{};
+    ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds.data()), 0);
+    std::array<char, PAYLOAD.size()> payload{};
+    std::ranges::copy(PAYLOAD, payload.begin());
+    ASSERT_EQ(::write(fds[1], payload.data(), payload.size()),
+              static_cast<ssize_t>(payload.size()));
+
+    std::array<char, PAYLOAD.size()> received{};
+    auto first = recv_once(&r, fds[0], std::as_writable_bytes(std::span{received}));
+    first.resume();
+    r.submit();
+    while (!first.handle().done())
+        r.reap();
+    EXPECT_EQ(first.result(), PAYLOAD.size());
+
+    ::close(fds[1]); // the peer goes away: the next recv must report EOF, not an error
+    auto eof = recv_once(&r, fds[0], std::as_writable_bytes(std::span{received}));
+    eof.resume();
+    r.submit();
+    while (!eof.handle().done())
+        r.reap();
+    EXPECT_EQ(eof.result(), 0U);
     EXPECT_EQ(r.running_io(), 0U);
 }
 

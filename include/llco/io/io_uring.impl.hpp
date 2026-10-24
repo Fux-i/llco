@@ -7,6 +7,8 @@
 #include <system_error>
 #include <utility>
 
+#include <sys/socket.h>
+
 namespace llco::io {
 
 inline ring::ring(unsigned entries) {
@@ -76,9 +78,9 @@ inline auto ring::running_io() const noexcept -> unsigned {
 }
 
 inline rw_awaiter::rw_awaiter(ring &owner, int fd, std::span<std::byte> buffer,
-                              std::uint64_t offset, bool write) noexcept
+                              std::uint64_t offset, kind which) noexcept
     : m_ring{&owner}, m_buffer{buffer.data()}, m_len{static_cast<unsigned>(buffer.size())},
-      m_offset{offset}, m_fd{fd}, m_write{write} {}
+      m_offset{offset}, m_fd{fd}, m_kind{which} {}
 
 inline auto rw_awaiter::await_ready() const noexcept -> bool {
     return false;
@@ -96,10 +98,20 @@ inline void rw_awaiter::await_suspend(std::coroutine_handle<> handle) {
         m_ring->submit();
         sqe = m_ring->sqe();
     }
-    if (m_write)
-        ::io_uring_prep_write(sqe, m_fd, m_buffer, m_len, m_offset);
-    else
+    switch (m_kind) {
+    case kind::read:
         ::io_uring_prep_read(sqe, m_fd, m_buffer, m_len, m_offset);
+        break;
+    case kind::write:
+        ::io_uring_prep_write(sqe, m_fd, m_buffer, m_len, m_offset);
+        break;
+    case kind::recv:
+        ::io_uring_prep_recv(sqe, m_fd, m_buffer, m_len, 0);
+        break;
+    case kind::send:
+        ::io_uring_prep_send(sqe, m_fd, m_buffer, m_len, MSG_NOSIGNAL);
+        break;
+    }
     ::io_uring_sqe_set_data(sqe, static_cast<completion *>(this));
     armed(*m_ring, handle);
 }
@@ -112,12 +124,20 @@ inline auto rw_awaiter::await_resume() const -> std::size_t {
 
 inline auto read(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset)
     -> rw_awaiter {
-    return {owner, fd, buffer, offset, false};
+    return {owner, fd, buffer, offset, rw_awaiter::kind::read};
 }
 
 inline auto write(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset)
     -> rw_awaiter {
-    return {owner, fd, buffer, offset, true};
+    return {owner, fd, buffer, offset, rw_awaiter::kind::write};
+}
+
+inline auto recv(ring &owner, int fd, std::span<std::byte> buffer) -> rw_awaiter {
+    return {owner, fd, buffer, 0, rw_awaiter::kind::recv};
+}
+
+inline auto send(ring &owner, int fd, std::span<std::byte> buffer) -> rw_awaiter {
+    return {owner, fd, buffer, 0, rw_awaiter::kind::send};
 }
 
 inline auto to_kernel_time(std::chrono::nanoseconds timeout) noexcept -> __kernel_timespec {

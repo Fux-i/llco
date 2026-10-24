@@ -76,17 +76,20 @@ class completion {
 
 // One in-flight kernel op; it lives in the awaiting frame until reap() hands it a result.
 class [[LLCO_AWAIT_HINT]] rw_awaiter : public completion {
+  public:
+    enum class kind { read, write, recv, send };
+
   private:
     ring         *m_ring;
     std::byte    *m_buffer;
     unsigned      m_len;
     std::uint64_t m_offset;
     int           m_fd;
-    bool          m_write;
+    kind          m_kind;
 
   public:
     rw_awaiter(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset,
-               bool write) noexcept;
+               kind which) noexcept;
     CLASS_NO_COPY_MOVE(rw_awaiter);
 
     auto await_ready() const noexcept -> bool;
@@ -101,8 +104,14 @@ class [[LLCO_AWAIT_HINT]] rw_awaiter : public completion {
 // Reads into buffer; it must be co_awaited on the ring's owner thread.
 auto read(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset = 0) -> rw_awaiter;
 
-// Writes from buffer; it must be co_awaited on the ring's owner thread.
+// Writes from buffer to a file or pipe. On a socket use send: this one can raise SIGPIPE.
 auto write(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offset = 0) -> rw_awaiter;
+
+// Reads from a socket; a closed peer reads as zero bytes, not as an error.
+auto recv(ring &owner, int fd, std::span<std::byte> buffer) -> rw_awaiter;
+
+// Writes to a socket; MSG_NOSIGNAL is always set, so a dead peer is EPIPE and never a signal.
+auto send(ring &owner, int fd, std::span<std::byte> buffer) -> rw_awaiter;
 
 // Deadline in the form a timeout op expects; it must outlive the op.
 inline auto to_kernel_time(std::chrono::nanoseconds timeout) noexcept -> __kernel_timespec;

@@ -49,7 +49,8 @@ class engine {
     // runs a loop thread; the engine stays manual until then
     void start();
 
-    // stops the loop thread, running what was already queued
+    // stops the loop thread: it runs what was queued and waits for the ops the kernel still
+    // holds before returning
     void stop();
 
     // loop iterations so far; read it after stop()

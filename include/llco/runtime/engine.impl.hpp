@@ -62,8 +62,17 @@ inline void engine::start() {
 inline void engine::stop() {
     if (m_thread.joinable()) {
         m_thread.request_stop();
-        m_thread.join();
-        (void)drain(); // the loop may stop before it sees the last pushes; run them here
+        m_thread.join(); // the loop runs its own ops out before it returns
+        // Tasks pushed after the loop's last look still have to run; their ops are submitted by
+        // this thread, which stays alive until they come home.
+        for (;;) {
+            (void)drain();
+            (void)ring().submit();
+            if (ring().running_io() == 0 && m_queue.empty())
+                break;
+            if (ring().reap() == 0)
+                wait();
+        }
     }
     if (m_event_fd >= 0) {
         ring().unregister_eventfd(); // the ring outlives this start/stop cycle
@@ -126,15 +135,16 @@ inline void engine::loop(const std::stop_token &token) {
         (void)drain();
         (void)ring().submit(); // one enter per batch; nothing pending costs no syscall
         (void)ring().reap();   // completions that landed inside submit(), or since the last wakeup
-        if (token.stop_requested())
+        // Stop only once the kernel holds nothing of ours: the ops were submitted by this
+        // thread, and it gets them cancelled the moment it exits.
+        if (token.stop_requested() && m_queue.empty() && ring().running_io() == 0)
             return;
         // Announce the sleep first, then look: a push that landed before this look is still
         // in the queue, and one that lands after it rings the bell. Reversing these two is a
         // lost wakeup. The stop token needs the same look, because its callback went through
         // the sleeping check too and may have decided not to ring.
         m_sleeping = true;
-        if (m_queue.empty() && ring().pending() == 0 && ring().sq_pending() == 0 &&
-            !token.stop_requested())
+        if (m_queue.empty() && ring().pending() == 0 && ring().sq_pending() == 0)
             wait();
         m_sleeping = false;
     }

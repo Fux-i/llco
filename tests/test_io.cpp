@@ -28,6 +28,9 @@ constexpr auto BUDGET        = 1s;
 constexpr auto POLL_INTERVAL = 1ms;
 constexpr auto SETTLE        = 50ms;
 
+// How long the writer thread delays before feeding the pipe that stop() is draining.
+constexpr auto WRITER_DELAY = 20ms;
+
 // Raw ops are never dispatched to a coroutine, so they must clear user_data themselves:
 // get_sqe() leaves the previous slot's value in place.
 task<> arm_timeouts(engine *e, __kernel_timespec *deadline, std::uint64_t count) {
@@ -261,6 +264,32 @@ TEST(io, write_puts_bytes_into_the_pipe) {
     const std::string_view back{received.data(), received.size()};
     EXPECT_EQ(back, PAYLOAD);
     EXPECT_EQ(r.running_io(), 0U);
+}
+
+TEST(io, stop_waits_for_running_io) {
+    std::array<int, 2> fds{};
+    ASSERT_EQ(::pipe(fds.data()), 0);
+    std::array<std::byte, 1> buffer{};
+    std::atomic<bool>        read_done{false};
+
+    engine e;
+    e.start();
+    ASSERT_TRUE(e.spawn(read_into(&e, fds[0], buffer, &read_done)));
+    ASSERT_TRUE(wait_until([&] { return e.ring().running_io() == 1; }))
+        << "the read never reached the ring";
+
+    std::jthread writer{[fd = fds[1]] {
+        std::this_thread::sleep_for(WRITER_DELAY);
+        const char byte = 'x';
+        (void)::write(fd, &byte, 1); // arrives after stop() has begun
+    }};
+    const auto begin = std::chrono::steady_clock::now();
+    e.stop();
+    const auto elapsed = std::chrono::steady_clock::now() - begin;
+
+    EXPECT_GE(elapsed, WRITER_DELAY / 2) << "stop() returned before the op completed";
+    EXPECT_TRUE(read_done.load()) << "stop() dropped the work it was waiting for";
+    EXPECT_EQ(e.ring().running_io(), 0U);
 }
 
 TEST(io, engine_dispatches_completion) {

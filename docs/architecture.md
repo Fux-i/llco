@@ -101,6 +101,7 @@ M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `r
 ## scheduler：轮转放置与满载重试
 
 - `submit(task<T>&&)`：`release()` → 从游标起点沿环扫一圈 `try_adopt` → 有 engine 接受就返回 true；整圈都满则 `destroy()` 帧并返回 false。放置只给起点，能不能落地由 `try_adopt` 决定（ADR-0005）。
+- `run(tasks...)` 是便利入口：任意多个 `task<T>` 一次提交，第一个装不下就抛 `std::runtime_error`（已接受的任务继续跑；被拒的帧按 ADR-0004 销毁，不回滚）。
 - 满载重试**不用** `spawn`：`spawn` 失败即销毁帧，任务会凭空消失；`try_adopt` 失败时所有权仍在调用方，同一个句柄可以继续试下一个 engine（ADR-0004 已按此订正）。
 - `engine::load()` 是队列长度采样，只给测试与 demo 看积压，不参与放置。
 - 跨 engine 接力仍走 M3 的 `resume_on`：目标 engine 只是另一个满足 `Executor` 的对象。trace 里每个 engine 线程把自己的泳道命名为 `engine-i`，接力表现为同一条 `resume` 切片出现在另一条泳道上；不做 flow 箭头，因为 `resume_on` 的 `await_suspend` 只拿到类型擦除的句柄，够不到 promise（见 `docs/ig_/M8`）。
@@ -131,12 +132,13 @@ const int winner = co_await first->wait();
 
 ## 网络层（M12）
 
-一条连接 = 一个 detached 协程：`accept` 拿到 fd → `recv`/`send` 循环 → 读回 0（EOF）或异常 → `shutdown(SHUT_WR)` → `close`。`accept_loop` 自己也是协程，每接一个连接就 `spawn` 一个回显协程（队列满载按 ADR-0004 丢连接并关 fd）。
+一条连接 = 一个 detached 协程：`accept` 拿到 fd → `recv`/`send` 循环 → 读回 0（EOF）或异常 → `shutdown(SHUT_WR)` → `close`。`accept_loop` 自己也是协程，每接一个连接就 `spawn` 一个回显协程（队列满载按 ADR-0004 丢连接并关 fd）。调用点用的是两个薄对象（`net::connection` / `net::listener`），`io::` 层仍然只认显式 `ring&`。
 
 - **数据面只走 `send`/`recv`**：`IORING_OP_WRITE` 在 peer 已关闭时 `res=-32` 且**真的投递 SIGPIPE**（SIG_DFL 下杀进程），`IORING_OP_SEND` 不会；`io::send` 硬编码 `MSG_NOSIGNAL`，不赌内核版本。`read`/`write` 只给 pipe 与文件（ADR-0007）。
 - **提交时机**：`accept`/`connect`/`cancel` 与读写共用同一条路径——awaiter 只填 SQE，循环统一 `submit`；`connect` 的 `sockaddr_in` 被内核在提交时拷走，所以地址只需活到协程挂起期间。
 - **关停**：`stop()` 要等 `running_io() == 0`，而监听 fd 上的 pending accept 永远等不到——`io::cancel(ring, fd)` 把它打断成 `-ECANCELED`；cancel 自己返回 `0`，没有可取消的 op 时 `-ENOENT`（映射成 `false`，不是异常）。demo 的收尾是：信号 → `sync_wait` 一个先 `resume_on` 到 engine 的 cancel 任务 → `stop()` → `close(listener)`。
 - **fd 契约**：listener 与 accepted fd 都是非阻塞 + close-on-exec；关掉之前该 fd 上不能有在飞 op。IPv4 only（`connect` 收 `sockaddr_in`）。
+- **两个薄对象**：`net::connection{ring, fd}` / `net::listener{ring, port}` 只是把 `ring` 和 fd 收进对象——成员函数直接返回 awaiter（`conn.recv(buf)`、`conn.send(view)`），`listener.accept()` 的 `await_resume` 直接是 `connection`，`listener.cancel()` 就是收尾那一发取消。fd 由析构关闭，`connection` 可 move（源置 -1），所以"把连接 move 进 `spawn` 的帧、帧被销毁时关 fd"是自动的。
 
 ## 文件布局约定
 

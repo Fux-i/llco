@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 #include <liburing.h>
 #include <netinet/in.h>
@@ -173,8 +174,14 @@ auto write(ring &owner, int fd, std::span<std::byte> buffer, std::uint64_t offse
 // Reads from a socket; a closed peer reads as zero bytes, not as an error.
 auto recv(ring &owner, int fd, std::span<std::byte> buffer) -> rw_awaiter;
 
+// The same read for character buffers, so call sites skip the byte casts.
+auto recv(ring &owner, int fd, std::span<char> buffer) -> rw_awaiter;
+
 // Writes to a socket; MSG_NOSIGNAL is always set, so a dead peer is EPIPE and never a signal.
 auto send(ring &owner, int fd, std::span<std::byte> buffer) -> rw_awaiter;
+
+// Writes a string to a socket; the kernel only reads it, so the const is cast away inside.
+auto send(ring &owner, int fd, std::string_view buffer) -> rw_awaiter;
 
 // Accepts one connection on a listening socket; the new socket is non-blocking, close-on-exec.
 auto accept(ring &owner, int listener) -> accept_awaiter;

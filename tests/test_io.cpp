@@ -93,6 +93,15 @@ task<> send_once(io::ring *r, int fd, std::span<std::byte> buffer) {
     co_return;
 }
 
+task<> send_chars(io::ring *r, int fd, std::string_view payload) {
+    (void)co_await io::send(*r, fd, payload);
+    co_return;
+}
+
+task<std::size_t> recv_chars(io::ring *r, int fd, std::span<char> buffer) {
+    co_return co_await io::recv(*r, fd, buffer);
+}
+
 task<int> accept_once(io::ring *r, int listener) {
     co_return co_await io::accept(*r, listener);
 }
@@ -299,6 +308,30 @@ TEST(io, send_writes_to_the_peer) {
     ASSERT_EQ(::read(fds[1], received.data(), received.size()),
               static_cast<ssize_t>(received.size()));
     const std::string_view back{received.data(), received.size()};
+    EXPECT_EQ(back, PAYLOAD);
+    EXPECT_EQ(r.running_io(), 0U);
+}
+
+TEST(io, recv_send_char_overloads) {
+    io::ring           r;
+    std::array<int, 2> fds{};
+    ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds.data()), 0);
+    std::array<char, PAYLOAD.size()> buffer{};
+
+    auto sent = send_chars(&r, fds[0], PAYLOAD);
+    sent.resume();
+    r.submit();
+    while (!sent.handle().done())
+        r.reap();
+
+    auto received = recv_chars(&r, fds[1], buffer);
+    received.resume();
+    r.submit();
+    while (!received.handle().done())
+        r.reap();
+
+    EXPECT_EQ(received.result(), PAYLOAD.size());
+    const std::string_view back{buffer.data(), buffer.size()};
     EXPECT_EQ(back, PAYLOAD);
     EXPECT_EQ(r.running_io(), 0U);
 }

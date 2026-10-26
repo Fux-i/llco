@@ -67,7 +67,7 @@ inline void engine::stop() {
         // this thread, which stays alive until they come home.
         for (;;) {
             (void)drain();
-            (void)ring().submit();
+            ring().submit();
             if (ring().running_io() == 0 && m_queue.empty())
                 break;
             if (ring().reap() == 0)
@@ -133,8 +133,8 @@ inline void engine::loop(const std::stop_token &token) {
     for (;;) {
         ++m_loops;
         (void)drain();
-        (void)ring().submit(); // one enter per batch; nothing pending costs no syscall
-        (void)ring().reap();   // completions that landed inside submit(), or since the last wakeup
+        ring().submit();     // one enter per batch; nothing pending costs no syscall
+        (void)ring().reap(); // completions that landed inside submit(), or since the last wakeup
         // Stop only once the kernel holds nothing of ours: the ops were submitted by this
         // thread, and it gets them cancelled the moment it exits.
         if (token.stop_requested() && m_queue.empty() && ring().running_io() == 0)

@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <coroutine>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -74,6 +75,37 @@ TEST(scheduler, round_robin_distributes) {
     released.store(true);
     s.stop();
     EXPECT_EQ(done.load(), static_cast<int>(batch));
+}
+
+TEST(scheduler, run_submits_every_task) {
+    scheduler        s{2};
+    std::atomic<int> done{0};
+
+    s.run(touch(&done), touch(&done));
+    s.stop(); // each engine drains what it was given
+    EXPECT_EQ(done.load(), 2) << "run() did not submit every task";
+}
+
+TEST(scheduler, run_throws_when_full) {
+    scheduler             s{1};
+    std::atomic<unsigned> started{0};
+    std::atomic<bool>     released{false};
+    std::atomic<int>      done{0};
+    std::vector<std::coroutine_handle<>> frames;
+
+    ASSERT_TRUE(s.engine_at(0).spawn(hold(&started, &released)));
+    wait_for_holds(&started, 1);
+    ASSERT_TRUE(fill(s.engine_at(0), frames));
+
+    EXPECT_THROW(s.run(touch(&done)), std::runtime_error)
+        << "a full scheduler must not swallow the task";
+
+    released.store(true);
+    s.stop();
+    EXPECT_EQ(done.load(), 0);
+
+    for (auto frame : frames)
+        frame.destroy();
 }
 
 TEST(scheduler, retries_on_full_engine) {

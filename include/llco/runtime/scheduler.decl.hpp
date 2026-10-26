@@ -33,6 +33,11 @@ class scheduler {
     template <class T>
     [[LLCO_DISCARD_HINT]]
     auto submit(task<T> &&t) noexcept -> bool;
+
+    // submits every task; throws std::runtime_error on the first rejection (ADR-0004 destroys
+    // that frame, and the tasks already accepted keep running)
+    template <class... T>
+    void run(task<T> &&...tasks);
 };
 
 } // namespace llco

@@ -150,7 +150,7 @@ inline auto recv(ring &owner, int fd, std::span<char> buffer) -> rw_awaiter {
 }
 
 inline auto send(ring &owner, int fd, std::string_view buffer) -> rw_awaiter {
-    auto *raw = static_cast<const void *>(buffer.data());
+    const auto *raw = static_cast<const void *>(buffer.data());
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): the kernel only reads for send
     auto *bytes = const_cast<std::byte *>(static_cast<const std::byte *>(raw));
     return send(owner, fd, std::span{bytes, buffer.size()});

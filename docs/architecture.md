@@ -140,6 +140,12 @@ const int winner = co_await first->wait();
 - **fd 契约**：listener 与 accepted fd 都是非阻塞 + close-on-exec；关掉之前该 fd 上不能有在飞 op。IPv4 only（`connect` 收 `sockaddr_in`）。
 - **两个薄对象**：`net::connection{ring, fd}` / `net::listener{ring, port}` 只是把 `ring` 和 fd 收进对象——成员函数直接返回 awaiter（`conn.recv(buf)`、`conn.send(view)`），`listener.accept()` 的 `await_resume` 直接是 `connection`，`listener.cancel()` 就是收尾那一发取消。fd 由析构关闭，`connection` 可 move（源置 -1），所以"把连接 move 进 `spawn` 的帧、帧被销毁时关 fd"是自动的。
 
+### M13：连接由 scheduler 放置
+
+一个 listener 在 engine 0 上，acceptor 用 `listener.accept_fd()` 拿裸 fd，`scheduler.submit(serve(fd))` 轮转放置；`serve` 在目标 engine 上出生（`current_engine()->ring()`），此后钉死。不使用 `SO_REUSEPORT`（ADR-0008）。
+
+代价与边界：acceptor 单线程且与 engine 0 共用线程；每条连接一次跨线程入队 + 门铃；队列满按 ADR-0004 丢连接并关 fd。关停仍只 cancel listener，活连接（idle recv）会让 `stop()` 等到它们结束。trace 里 accept 与 echo 分属两条泳道。
+
 ## 文件布局约定
 
 `include/llco/` 按层分目录，纯 header-only（**没有 `src/`**，CMake 里 `llco` 是 INTERFACE 库）：

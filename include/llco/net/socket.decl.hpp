@@ -80,6 +80,9 @@ class listener {
     // Waits for one connection; the new socket is owned by the result.
     auto accept() -> accepting;
 
+    // Waits for one connection and hands back the bare fd, for a caller that places it elsewhere.
+    auto accept_fd() -> io::accept_awaiter;
+
     // Cancels a pending accept, which completes with ECANCELED.
     auto cancel() -> io::cancel_awaiter;
 

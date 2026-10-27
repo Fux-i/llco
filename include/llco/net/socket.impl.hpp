@@ -114,6 +114,10 @@ inline auto listener::accept() -> accepting {
     return accepting{*m_ring, m_fd};
 }
 
+inline auto listener::accept_fd() -> io::accept_awaiter {
+    return io::accept(*m_ring, m_fd);
+}
+
 inline auto listener::cancel() -> io::cancel_awaiter {
     return io::cancel(*m_ring, m_fd);
 }

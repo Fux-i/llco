@@ -16,6 +16,10 @@ _Avoid_: fake engine, mock engine
 拥有多个 engine、并按放置策略把任务交给其中一个的组件。
 _Avoid_: dispatcher, thread pool, balancer
 
+**acceptor**:
+唯一执行 accept、把新连接交给 scheduler 放置的协程；llco 里它跑在 engine 0 上。
+_Avoid_: listener, accept thread
+
 **placement policy**:
 scheduler 决定"这个任务放进哪个 engine"的规则。当前只有一种实现——轮转（round robin）——直接写在 `scheduler` 里，没有可替换的接口（ADR-0005）。
 _Avoid_: strategy, load balancing algorithm

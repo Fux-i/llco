@@ -28,6 +28,7 @@
 | M10 | 同步原语（latch → when_all/when_any → event） | M8 | 编排能力 |
 | M11 | io_uring 读写（read/write awaiter） | M6 | 真 IO |
 | M12 | TCP connector / echo | M11 | 网络组件 |
+| M13 | 多 engine TCP：scheduler 放置 | M8, M12 | 一条连接一个 engine |
 
 ---
 
@@ -493,6 +494,35 @@ $ ./build/bin/echo_server
 - **`prep_accept` 的 flags 只作用于新 socket**：它不会让 accept 变成非阻塞（本来也不阻塞），只是让新 fd 带上 `SOCK_NONBLOCK|SOCK_CLOEXEC`。
 - **`connect` 的地址在提交时被拷走**：延迟提交意味着地址要活到挂起期间；收 `sockaddr_in` 并在 awaiter 里做唯一一次 cast，是为了不把 `reinterpret_cast` 撒到每个调用点。
 - **IPv4 only**：`connect` 收 `sockaddr_in`；要 IPv6 时再加一个重载。
+
+---
+
+## M13 · 多 engine TCP：连接由 scheduler 放置
+
+**目标**：同一个 listener、4 个 engine；accept 在 engine 0，连接由 `scheduler::submit` 放到目标 engine，出生后钉死。
+
+**改动**：`net/socket.*`（`accept_fd()`）、`examples/echo_server.cpp`（单 engine → scheduler）、`tests/test_tcp_placement.cpp`、ADR-0008、architecture / 本文 / GLOSSARY。
+
+**先写的失败测试**
+
+- `tcp.scheduler_places_connections_round_robin`：4 engine + 顺序 4 条连接，每条 `serve` 记录 `current_engine()`，断言每 engine 恰好 1 条。
+- `tcp.stop_cancels_the_pending_accept`：accept 已 arm 时先 cancel 再 stop，断言 `stop()` 在预算内返回、`running_io()` 归零。
+
+**实现顺序**
+
+1. `listener::accept_fd()`（3 行，和 `cancel()` 对称）。
+2. 测试里的 acceptor：`accept_fd()` → `scheduler.submit(serve(fd))`；`serve` 用 `current_engine()->ring()` 构造 connection。测试只用一个顺序连接的 client 任务，保证 serve 的 submit 连续、放置可断言。
+3. demo 改 4 engine，打印每 engine 的连接数与 loop 数；SIGINT 路径保持"cancel → stop"。
+4. ADR-0008 + 文档。
+
+**完成标志**：`./build/bin/echo_server` 回显后 Ctrl-C 干净退出，打印每个 engine 的连接数；四棵树 ctest 全绿；lint 干净。
+
+**坑**
+
+- **测试里别并发提交 client**：client 的 `submit` 会和 acceptor 的 `submit` 抢轮转游标，serve 的落点就不再是连续槽位，"每 engine 一条"会偶发失败。一个 client 任务顺序连 4 条即可。
+- **cancel 必须发生在 stop 之前**，且由 engine 0 提交：`close(fd)` 不会取消在飞 op，pending accept 会让 `stop()` 永久等。
+- **`serve` 不能在 sync_wait 的 root 上跑**：`current_engine()` 为空，`connection` 没有 ring 可用；它只能经 `scheduler::submit` 投递。
+- **有活连接时 stop 仍会等**：demo 验收先断客户端；连接级取消是独立里程碑。
 
 ---
 

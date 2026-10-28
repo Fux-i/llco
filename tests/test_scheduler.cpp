@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <llco/config.hpp>
 #include <llco/core/task.hpp>
+#include <llco/runtime/run.hpp>
 #include <llco/runtime/scheduler.decl.hpp>
 
 #include <atomic>
@@ -82,7 +83,7 @@ TEST(scheduler, run_submits_every_task) {
     scheduler::init(2);
     std::atomic<int> done{0};
 
-    scheduler::run(touch(&done), touch(&done));
+    llco::run(touch(&done), touch(&done));
     scheduler::stop(); // each engine drains what it was given
     EXPECT_EQ(done.load(), 2) << "run() did not submit every task";
 }
@@ -98,7 +99,7 @@ TEST(scheduler, run_throws_when_full) {
     wait_for_holds(&started, 1);
     ASSERT_TRUE(fill(scheduler::engine_at(0), frames));
 
-    EXPECT_THROW(scheduler::run(touch(&done)), std::runtime_error)
+    EXPECT_THROW(llco::run(touch(&done)), std::runtime_error)
         << "a full scheduler must not swallow the task";
 
     released.store(true);
@@ -175,4 +176,28 @@ TEST(scheduler, init_rebuilds_the_pool) {
     ASSERT_EQ(scheduler::size(), 2U);
     for (unsigned i = 0; i < scheduler::size(); ++i)
         EXPECT_EQ(scheduler::engine_at(i).load(), 0U) << "engine " << i << " kept old work";
+}
+
+TEST(scheduler, sync_run_waits_for_every_task) {
+    std::atomic<int> done{0};
+    scheduler::init(2);
+
+    sync_run(touch(&done), touch(&done), touch(&done));
+
+    EXPECT_EQ(done.load(), 3) << "sync_run returned before the tasks finished";
+    scheduler::stop();
+}
+
+TEST(scheduler, run_accepts_a_callable) {
+    std::atomic<int> done{0};
+    scheduler::init(1);
+
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-capturing-lambda-coroutines): run() stores the closure in a frame
+    llco::run([&done]() -> task<> {
+        ++done;
+        co_return;
+    });
+    scheduler::stop();
+
+    EXPECT_EQ(done.load(), 1) << "run() never invoked the callable";
 }

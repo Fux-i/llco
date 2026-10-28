@@ -530,11 +530,11 @@ $ ./build/bin/echo_server
 
 里程碑跑完后做了一轮 API 打磨，目标是"调用点更短、错误仍然可见"，已有契约一条没动：
 
-- `scheduler::run(tasks...)`：一次提交任意多个 `task<T>`，第一个装不下就抛 `std::runtime_error`（已接受的任务继续跑；被拒的帧按 ADR-0004 销毁，不回滚）。
+- `llco::run(tasks...)`（当时叫 `scheduler::run`，ADR-0010 之后搬到自由函数）：一次提交任意多个 `task<T>`，第一个装不下就抛 `std::runtime_error`（已接受的任务继续跑；被拒的帧按 ADR-0004 销毁，不回滚）。
 - `io::recv` / `io::send` 加了 `std::span<char>` 与 `std::string_view` 重载，调用点不再写 `std::as_writable_bytes(...)`。
 - `net::connection` / `net::listener`：把 `ring` 和 fd 收进对象，`co_await conn.recv(buffer)` / `co_await listener.accept()`（结果直接是 `connection`）；fd 由析构关闭，`listener.cancel()` 负责打断 pending accept。`echo_server` 从 105 行降到 96 行，回显循环里不再出现 `ring()`。
 - 不动的：`io::` 层的显式 `ring&` 契约、ADR-0006 的分发路径、`stop()` 语义、`llco.hpp` 聚合头文件（io/net 仍不进聚合头文件）。
-- 四套构建现在：default 73、asan 73、trace 75、gcc 73（M12 完成时是 66/66/68/66；这轮加了 3 条用例，ADR-0010 又加了 2 条）。
+- 四套构建现在：default 75、asan 75、trace 77、gcc 75（M12 完成时是 66/66/68/66；这轮加了 3 条用例，ADR-0010 又加了 4 条）。
 
 ---
 

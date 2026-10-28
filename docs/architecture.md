@@ -23,7 +23,7 @@ llco 是一个 C++23 协程编排框架：**task** 负责"怎么写"，**engine*
 
 ```mermaid
 flowchart TB
-  U["用户代码<br/>task&lt;T&gt; + co_await"] -->|"submit / sync_wait"| S["scheduler 单例<br/>N 个 engine + 轮转放置"]
+  U["用户代码<br/>task&lt;T&gt; + co_await"] -->|"run / sync_run / submit / sync_wait"| S["scheduler 单例<br/>N 个 engine + 轮转放置"]
   S -->|"try_add(handle)"| E["engine（单线程执行上下文）"]
   E --> Q["queue<br/>atomic_queue2 适配层"]
   E --> R["io_uring<br/>每 engine 一个，仅本线程使用"]
@@ -59,7 +59,7 @@ concept Executor = requires(E& e, std::coroutine_handle<> h) {
 
 ## 一次任务的生命周期
 
-1. 用户写 `task<T>`（惰性，未开始）。`main` 通过 `scheduler::submit(std::move(t))` 或 `engine.spawn(std::move(t))` 交出所有权；或者在自己的协程里 `co_await` 一个子任务。
+1. 用户写 `task<T>`（惰性，未开始）。`main` 通过 `scheduler::submit(std::move(t))`、`llco::run(...)` 或 `engine.spawn(std::move(t))` 交出所有权；或者在自己的协程里 `co_await` 一个子任务。
 2. 提交：`task::release()` 交出句柄 → 句柄进目标 engine 的队列 → 写 eventfd 唤醒 → 返回。
 3. engine 线程取出句柄 → `resume()` → 协程跑到第一个真正的挂起点。
 4. 协程里 `co_await` 子任务：**inline symmetric transfer**，同一个线程直接跑子协程，不入队（ADR-0001）。
@@ -101,7 +101,7 @@ M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `r
 ## scheduler：轮转放置与满载重试
 
 - `scheduler::submit(task<T>&&)`：`release()` → 从游标起点沿环扫一圈 `try_adopt` → 有 engine 接受就返回 true；整圈都满、或 scheduler 已经 `stop()`，则 `destroy()` 帧并返回 false。放置只给起点，能不能落地由 `try_adopt` 决定（ADR-0005）。
-- `scheduler::run(tasks...)` 是便利入口：任意多个 `task<T>` 一次提交，第一个装不下就抛 `std::runtime_error`（已接受的任务继续跑；被拒的帧按 ADR-0004 销毁，不回滚）。
+- `llco::run(tasks...)` 是便利入口：任意多个 `task<T>` 一次提交，第一个装不下就抛 `std::runtime_error`（已接受的任务继续跑；被拒的帧按 ADR-0004 销毁，不回滚）。`sync_run(tasks...)` 提交后阻塞到这批任务全部结束，返回值与异常都不收集。
 - 单例与重建：`init(n)` 每次都换一套 engine（同 n 也重建），这是测试之间的归零点；`stop()` 保留 engine 对象，所以 `loop_count()` / `running_io()` 在关停后仍可读（ADR-0010）。
 - 满载重试**不用** `spawn`：`spawn` 失败即销毁帧，任务会丢失；`try_adopt` 失败时所有权仍在调用方，同一个句柄可以继续试下一个 engine（ADR-0004 已按此订正）。
 - `engine::load()` 是队列长度采样，只给测试与 demo 看积压，不参与放置。
@@ -158,7 +158,7 @@ include/llco/
   attr.hpp  config.hpp                    # 跨切面：每一层都 include，留在顶层
   concepts/ executor.hpp                  # 只放 concept
   core/     task.hpp  resume_on.hpp       # 模板，单文件
-  runtime/  queue.*  engine.*  scheduler.*
+  runtime/  queue.*  engine.*  scheduler.*  run.hpp   # run/sync_run 是自由函数入口
   sync/     event.hpp  latch.hpp  sync_wait.hpp   # 基元 + 阻塞点；组合写法写在文档里
   trace/    trace.*
   io/       io_uring.*                    # ring + 五个 awaiter 同文件（互相依赖）
@@ -171,7 +171,7 @@ include/llco/
 2. **入口只有一个**：拆开的模块由 `*.decl.hpp` 末尾 `#include <llco/.../同模块.impl.hpp>` 收口；`*.impl.hpp` 顶部反过来 include `.decl.hpp`（`#pragma once` 兜住循环）。用户永远只 include `.decl.hpp`，不存在"忘了 include impl 导致链接错误"。
 3. **非模板函数必须 `inline`**：写在类外的成员函数/自由函数都要 `inline`（类内定义不用）。engine、scheduler、trace 都是具体类（engine 不按队列参数化，只认 `queue_type`），所以 `*.impl.hpp` 里每个定义都要自己加 `inline`。
 4. **include 一律全路径**：内部头也写 `#include <llco/core/task.hpp>`，不用同目录相对写法。子目录里的相对写法会先在同一目录里找，M6/M7 就是这样撞上"找不到 attr.hpp"的。
-5. **聚合头文件只列用户会直接写到的类型**：`task`、`resume_on`、`engine`、`scheduler`、`run`、`sync_wait`。`attr`/`config`/`queue`/`concepts` 是内部依赖，trace/io 是可选重型模块，都不进聚合头文件；tests 保持精确 include，用来验证每个头文件自包含。
+5. **聚合头文件只列用户会直接写到的类型**：`task`、`resume_on`、`engine`、`scheduler`、`run`/`sync_run`、`sync_wait`。`attr`/`config`/`queue`/`concepts` 是内部依赖，trace/io 是可选重型模块，都不进聚合头文件；tests 保持精确 include，用来验证每个头文件自包含。
 
 ## 模块替换
 

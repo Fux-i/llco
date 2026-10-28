@@ -2,7 +2,6 @@
 
 #include <llco/runtime/scheduler.decl.hpp>
 
-#include <stdexcept>
 #include <utility>
 
 namespace llco {
@@ -76,12 +75,6 @@ auto scheduler::submit(task<T> &&t) -> bool {
     }
     handle.destroy();
     return false;
-}
-
-template <class... T>
-void scheduler::run(task<T> &&...tasks) {
-    if (!(submit(std::move(tasks)) && ...))
-        throw std::runtime_error{"scheduler is full"};
 }
 
 } // namespace llco

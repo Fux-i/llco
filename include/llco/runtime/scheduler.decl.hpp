@@ -44,10 +44,6 @@ class scheduler {
     template <class T>
     [[LLCO_DISCARD_HINT]]
     static auto submit(task<T> &&t) -> bool;
-
-    // submits every task; throws std::runtime_error on the first rejection (ADR-0004)
-    template <class... T>
-    static void run(task<T> &&...tasks);
 };
 
 } // namespace llco

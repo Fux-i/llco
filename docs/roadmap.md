@@ -385,7 +385,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 **接口**
 
 ```cpp
-co_await io::read(e.ring(), fd, buffer);   // -> std::size_t，res < 0 抛 system_error
+co_await io::read(e.ring(), fd, buffer);   // -> std::expected<std::size_t, error_code>
 co_await io::write(e.ring(), fd, buffer);  // 同一个 rw_awaiter，bool m_write 区分读写
 ```
 
@@ -397,7 +397,7 @@ ring 必须显式传进去：op 只能在 ring 属主线程上提交，没有"�
 |---|---|
 | `io.read_completes_with_bytes` | 不挂 engine 的 ring：`t.resume()` arm → `r.submit()` → 写管道 → `while (!t.handle().done()) r.reap()`；顺带断言 `running_io()` 1→0 |
 | `io.read_wakes_only_the_right_coroutine` | 两条管道两个 task，只写一条，断言另一个没被唤醒 |
-| `io.failed_op_propagates_negative_errno` | 管道写端做 read → `-EBADF` → `system_error`（实测写端与已关闭 fd 都是 `-EBADF`，不可区分） |
+| `io.failed_op_propagates_negative_errno` | 管道写端做 read → `-EBADF` → 返回 `error_code`（实测写端与已关闭 fd 都是 `-EBADF`，不可区分） |
 | `io.write_puts_bytes_into_the_pipe` | 写进去再从另一头读回来 |
 | `io.sq_full_flushes_and_retries` | `io::ring r{2}`：第三个 op 必然撞满，冲刷后 `sq_pending() == 1` |
 | `io.engine_dispatches_completion` | 起 engine，验证 submit → eventfd → reap → 内联恢复整条路 |
@@ -466,7 +466,7 @@ co_await io::cancel(e.ring(), fd);                         // true = 真取消�
 1. `completion` 基类：`reap()` 不再认识具体 awaiter 类型（写 result → `running_io--` → `resume`）。
 2. 数据面：`rw_awaiter` 的 `kind` 扩到 4 值（read/write/recv/send），`send` 带 `MSG_NOSIGNAL`。
 3. `accept` / `connect`：`accept` 只返 fd；`connect` 收 `sockaddr_in`（IPv4），地址契约写进注释。
-4. `cancel`：`0` → `true`、`-ENOENT` → `false`、其它负值抛。
+4. `cancel`：`0` → `true`、`-ENOENT` → `false`、其它负值 → `error_code`（ADR-0009）。
 5. `net/socket.*`：四个纯 syscall 助手（`>3` 个自由函数，按拆分规则拆 decl/impl）。
 6. demo：SIGINT → `cancel` → `stop()`。
 

@@ -44,9 +44,9 @@ task<> sleeping_child(latch *done) {
     co_return;
 }
 
-task<> fan_out(scheduler *s, latch *done, std::size_t children) {
+task<> fan_out(latch *done, std::size_t children) {
     for (std::size_t i = 0; i < children; ++i)
-        (void)s->submit(sleeping_child(done));
+        (void)scheduler::submit(sleeping_child(done));
     co_await done->wait();
     co_return;
 }
@@ -63,9 +63,9 @@ task<> cross_engine_counter(latch *l, std::atomic<bool> *armed) {
 } // namespace
 
 TEST(latch, blocks_until_zero) {
-    engine  e;
-    latch   l{2};
-    int     steps = 0;
+    engine e;
+    latch  l{2};
+    int    steps = 0;
 
     ASSERT_TRUE(e.spawn(latch_waiter_steps(&l, &steps)));
     ASSERT_TRUE(e.run_once());
@@ -90,31 +90,31 @@ TEST(latch, zero_count_is_ready) {
 }
 
 TEST(latch, fan_out_runs_concurrently) {
-    scheduler s{static_cast<unsigned>(CHILDREN)};
-    latch     done{CHILDREN};
+    scheduler::init(static_cast<unsigned>(CHILDREN));
+    latch done{CHILDREN};
 
     const auto begin = std::chrono::steady_clock::now();
-    sync_wait(fan_out(&s, &done, CHILDREN));
+    sync_wait(fan_out(&done, CHILDREN));
     const auto elapsed = std::chrono::steady_clock::now() - begin;
-    s.stop();
+    scheduler::stop();
 
     EXPECT_LT(elapsed, CONCURRENCY_MAX) << "children ran serially instead of concurrently";
 }
 
 TEST(latch, cross_engine_countdown) {
-    scheduler                    s{2};
+    scheduler::init(2);
     latch                        l{2};
     std::atomic<std::thread::id> before{};
     std::atomic<std::thread::id> after{};
     std::atomic<bool>            armed{false};
     std::atomic<bool>            done{false};
 
-    ASSERT_TRUE(s.engine_at(0).spawn(thread_waiter(&l, &before, &after, &armed, &done)));
-    ASSERT_TRUE(s.engine_at(1).spawn(cross_engine_counter(&l, &armed)));
+    ASSERT_TRUE(scheduler::engine_at(0).spawn(thread_waiter(&l, &before, &after, &armed, &done)));
+    ASSERT_TRUE(scheduler::engine_at(1).spawn(cross_engine_counter(&l, &armed)));
 
     while (!done.load())
         std::this_thread::sleep_for(POLL);
-    s.stop();
+    scheduler::stop();
 
     EXPECT_EQ(before.load(), after.load()) << "the waiter must resume on its own engine";
     EXPECT_NE(before.load(), std::this_thread::get_id()) << "the waiter never ran on an engine";

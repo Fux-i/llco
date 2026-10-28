@@ -1,5 +1,7 @@
 # scheduler 是普通实例，不提供全局单例
 
+> **Superseded by [ADR-0010](0010-scheduler-is-a-singleton.md)（2026-10-28）。** 保留原文以记录当初的取舍；其中"测试需要两个 scheduler 同时存在"的理由经复核不成立。
+
 `scheduler` 通过构造函数拿到 engine 数量与放置策略，由使用者（`main`、测试夹具）持有。最初想做成全局单例（"任何地方都能 submit"），最终放弃：测试需要同时存在两个互不干扰的 scheduler，各自拥有线程池，单例会让这类测试只能串行、且失败表现为偶发。便利性交给可选的全局访问点（如果将来真的需要），但类的构造路径不被收窄。
 
 ## Considered Options

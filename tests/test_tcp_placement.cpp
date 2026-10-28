@@ -40,9 +40,9 @@ auto wait_until(Predicate done) -> bool {
 }
 
 // Records the engine it first ran on, then echoes one message back.
-task<> echo_counted(scheduler *s, int fd, std::vector<std::atomic<unsigned>> *landed) {
-    for (unsigned i = 0; i < s->size(); ++i)
-        if (&s->engine_at(i) == current_engine())
+task<> echo_counted(int fd, std::vector<std::atomic<unsigned>> *landed) {
+    for (unsigned i = 0; i < scheduler::size(); ++i)
+        if (&scheduler::engine_at(i) == current_engine())
             (*landed)[i].fetch_add(1);
     net::connection         conn{current_engine()->ring(), fd};
     std::array<char, CHUNK> buffer{};
@@ -53,7 +53,7 @@ task<> echo_counted(scheduler *s, int fd, std::vector<std::atomic<unsigned>> *la
 }
 
 // Accepts until stopped or cancelled; each connection is placed by the scheduler.
-task<> accept_loop(scheduler *s, net::listener *listener, std::atomic<bool> *stop,
+task<> accept_loop(net::listener *listener, std::atomic<bool> *stop,
                    std::vector<std::atomic<unsigned>> *landed) {
     for (;;) {
         if (stop->load())
@@ -64,14 +64,14 @@ task<> accept_loop(scheduler *s, net::listener *listener, std::atomic<bool> *sto
                 co_return;
             continue;
         }
-        if (!s->submit(echo_counted(s, *accepted, landed)))
+        if (!scheduler::submit(echo_counted(*accepted, landed)))
             ::close(*accepted);
     }
 }
 
 // The cancel has to be submitted by the listener ring's owner thread.
-task<> stop_accept(scheduler *s, net::listener *listener) {
-    co_await resume_on(s->engine_at(0));
+task<> stop_accept(net::listener *listener) {
+    co_await resume_on(scheduler::engine_at(0));
     (void)co_await listener->cancel();
 }
 
@@ -96,43 +96,43 @@ task<> drive_clients(std::uint16_t port, unsigned count, std::atomic<unsigned> *
 } // namespace
 
 TEST(tcp, scheduler_places_connections_round_robin) {
-    scheduler                         s{ENGINES};
-    net::listener                     listener{s.engine_at(0).ring(), 0};
+    scheduler::init(ENGINES);
+    net::listener                      listener{scheduler::engine_at(0).ring(), 0};
     std::vector<std::atomic<unsigned>> landed(ENGINES);
-    std::atomic<bool>                 stop{false};
-    std::atomic<unsigned>             echoed{0};
+    std::atomic<bool>                  stop{false};
+    std::atomic<unsigned>              echoed{0};
 
-    ASSERT_TRUE(s.engine_at(0).spawn(accept_loop(&s, &listener, &stop, &landed)));
-    ASSERT_TRUE(s.submit(drive_clients(listener.port(), ENGINES, &echoed)));
+    ASSERT_TRUE(scheduler::engine_at(0).spawn(accept_loop(&listener, &stop, &landed)));
+    ASSERT_TRUE(scheduler::submit(drive_clients(listener.port(), ENGINES, &echoed)));
 
     ASSERT_TRUE(wait_until([&] { return echoed.load() == ENGINES; }))
         << "the echoes never came back";
 
     stop.store(true);
-    sync_wait(stop_accept(&s, &listener));
-    s.stop();
+    sync_wait(stop_accept(&listener));
+    scheduler::stop();
 
     for (unsigned i = 0; i < ENGINES; ++i)
         EXPECT_EQ(landed[i].load(), 1U) << "engine " << i << " got the wrong share";
 }
 
 TEST(tcp, stop_cancels_the_pending_accept) {
-    scheduler                          s{2};
-    net::listener                      listener{s.engine_at(0).ring(), 0};
+    scheduler::init(2);
+    net::listener                      listener{scheduler::engine_at(0).ring(), 0};
     std::vector<std::atomic<unsigned>> landed(2);
     std::atomic<bool>                  stop{false};
 
-    ASSERT_TRUE(s.engine_at(0).spawn(accept_loop(&s, &listener, &stop, &landed)));
-    ASSERT_TRUE(wait_until([&] { return s.engine_at(0).ring().running_io() == 1; }))
+    ASSERT_TRUE(scheduler::engine_at(0).spawn(accept_loop(&listener, &stop, &landed)));
+    ASSERT_TRUE(wait_until([&] { return scheduler::engine_at(0).ring().running_io() == 1; }))
         << "the accept never armed";
 
     stop.store(true);
-    sync_wait(stop_accept(&s, &listener));
+    sync_wait(stop_accept(&listener));
 
     const auto begin = std::chrono::steady_clock::now();
-    s.stop();
+    scheduler::stop();
     const auto elapsed = std::chrono::steady_clock::now() - begin;
 
     EXPECT_LT(elapsed, BUDGET) << "stop() waited on a pending accept";
-    EXPECT_EQ(s.engine_at(0).ring().running_io(), 0U);
+    EXPECT_EQ(scheduler::engine_at(0).ring().running_io(), 0U);
 }

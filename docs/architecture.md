@@ -23,7 +23,7 @@ llco 是一个 C++23 协程编排框架：**task** 负责"怎么写"，**engine*
 
 ```mermaid
 flowchart TB
-  U["用户代码<br/>task&lt;T&gt; + co_await"] -->|"spawn / submit / sync_wait"| S["scheduler<br/>N 个 engine + 轮转放置"]
+  U["用户代码<br/>task&lt;T&gt; + co_await"] -->|"submit / sync_wait"| S["scheduler 单例<br/>N 个 engine + 轮转放置"]
   S -->|"try_add(handle)"| E["engine（单线程执行上下文）"]
   E --> Q["queue<br/>atomic_queue2 适配层"]
   E --> R["io_uring<br/>每 engine 一个，仅本线程使用"]
@@ -54,12 +54,12 @@ concept Executor = requires(E& e, std::coroutine_handle<> h) {
 - **handle 是唯一的交换单位**：队列里只放 `std::coroutine_handle<>`（8 字节、可平凡拷贝）。awaiter 不放队列——它活在协程帧里，寿命与队列不一致。
 - **父协程**：一个协程结束后把控制权交回去的那个协程，也就是 `co_await` 它的那个协程。顶层任务没有父协程，控制权交回 `noop_coroutine`。
 - **`sync_wait` 是调用线程的阻塞点**：`promise_base` 存一个 `std::binary_semaphore *`，`final_awaiter::await_suspend` 里**先** `release()` 再处理 continuation / detached（否则帧可能先被销毁）；`sync_wait` 在调用线程上 `resume()` 启动 root，然后阻塞在 semaphore 上，所以任务中途 `resume_on` 到别的 engine 也能被正确唤醒。这与 engine 自己的 eventfd 阻塞点无关。
-- **scheduler 是普通实例**（ADR-0002）：拥有 N 个 engine，构造即 `start()`，析构即 `stop()`（各自排空已入队任务）。放置只有一个规则：`m_next.fetch_add(1) % n` 挑起点，满了就沿环交给下一个还有空位的 engine，整圈都满才销毁帧并返回 false（ADR-0004 / ADR-0005）。`engine_at(i)` 是测试与 demo 的入口。
+- **scheduler 是进程内单例**（ADR-0010，推翻 ADR-0002）：`scheduler::init(n)` 建（或重建）N 个 engine，`stop()` 让每个 engine 排空已入队任务后退出，析构即 `stop()`。放置只有一个规则：`m_next.fetch_add(1) % n` 挑起点，满了就沿环交给下一个还有空位的 engine，整圈都满才销毁帧并返回 false（ADR-0004 / ADR-0005）。`engine_at(i)` 是测试与 demo 的入口。
 - **trace 是环境级的**：`llco::trace` 是命名空间而非对象（不做单例）；`trace::scope` 构造发 `B`、析构发 `E`，RAII 保证配对；每线程一条线程轨道（`thread_local` 缓冲 + 全局注册表，线程退出时搬进 `finished`），`trace::flush(path)` 写出 Chromium JSON 并排空。引擎埋点受 `LLCO_TRACE` 编译期开关控制，默认 0 时 `run_once()` 一行都不多。
 
 ## 一次任务的生命周期
 
-1. 用户写 `task<T>`（惰性，未开始）。`main` 通过 `scheduler.submit(std::move(t))` 或 `engine.spawn(std::move(t))` 交出所有权；或者在自己的协程里 `co_await` 一个子任务。
+1. 用户写 `task<T>`（惰性，未开始）。`main` 通过 `scheduler::submit(std::move(t))` 或 `engine.spawn(std::move(t))` 交出所有权；或者在自己的协程里 `co_await` 一个子任务。
 2. 提交：`task::release()` 交出句柄 → 句柄进目标 engine 的队列 → 写 eventfd 唤醒 → 返回。
 3. engine 线程取出句柄 → `resume()` → 协程跑到第一个真正的挂起点。
 4. 协程里 `co_await` 子任务：**inline symmetric transfer**，同一个线程直接跑子协程，不入队（ADR-0001）。
@@ -100,8 +100,9 @@ M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `r
 
 ## scheduler：轮转放置与满载重试
 
-- `submit(task<T>&&)`：`release()` → 从游标起点沿环扫一圈 `try_adopt` → 有 engine 接受就返回 true；整圈都满则 `destroy()` 帧并返回 false。放置只给起点，能不能落地由 `try_adopt` 决定（ADR-0005）。
-- `run(tasks...)` 是便利入口：任意多个 `task<T>` 一次提交，第一个装不下就抛 `std::runtime_error`（已接受的任务继续跑；被拒的帧按 ADR-0004 销毁，不回滚）。
+- `scheduler::submit(task<T>&&)`：`release()` → 从游标起点沿环扫一圈 `try_adopt` → 有 engine 接受就返回 true；整圈都满、或 scheduler 已经 `stop()`，则 `destroy()` 帧并返回 false。放置只给起点，能不能落地由 `try_adopt` 决定（ADR-0005）。
+- `scheduler::run(tasks...)` 是便利入口：任意多个 `task<T>` 一次提交，第一个装不下就抛 `std::runtime_error`（已接受的任务继续跑；被拒的帧按 ADR-0004 销毁，不回滚）。
+- 单例与重建：`init(n)` 每次都换一套 engine（同 n 也重建），这是测试之间的归零点；`stop()` 保留 engine 对象，所以 `loop_count()` / `running_io()` 在关停后仍可读（ADR-0010）。
 - 满载重试**不用** `spawn`：`spawn` 失败即销毁帧，任务会丢失；`try_adopt` 失败时所有权仍在调用方，同一个句柄可以继续试下一个 engine（ADR-0004 已按此订正）。
 - `engine::load()` 是队列长度采样，只给测试与 demo 看积压，不参与放置。
 - 跨 engine 继续执行仍走 M3 的 `resume_on`：目标 engine 只是另一个满足 `Executor` 的对象。trace 里每个 engine 线程把自己的线程轨道命名为 `engine-i`，继续执行表现为同一条 `resume` 切片出现在另一条线程轨道上；不做 flow 箭头，因为 `resume_on` 的 `await_suspend` 只拿到类型擦除的句柄，够不到 promise（见 `docs/ig_/M8`）。
@@ -118,13 +119,13 @@ M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `r
 // when_all：latch 计数
 latch done{n};
 for (std::size_t i = 0; i < n; ++i)
-    s.submit(work(i, &out[i], &done));   // 子任务最后一行 done.count_down()
+    scheduler::submit(work(i, &out[i], &done));   // 子任务最后一行 done.count_down()
 co_await done.wait();
 
 // when_any：event 必须共享，未完成任务还会引用它
 auto first = std::make_shared<event<int>>();
 for (std::size_t i = 0; i < n; ++i)
-    s.submit(probe(i, first));           // 子任务结束前 first->set(i)
+    scheduler::submit(probe(i, first));           // 子任务结束前 first->set(i)
 const int winner = co_await first->wait();
 ```
 
@@ -143,7 +144,7 @@ const int winner = co_await first->wait();
 
 ### M13：连接由 scheduler 放置
 
-一个 listener 在 engine 0 上，acceptor 用 `listener.accept_fd()` 拿原始 fd，`scheduler.submit(serve(fd))` 轮转放置；`serve` 在目标 engine 上首次执行（`current_engine()->ring()`），此后绑定。不使用 `SO_REUSEPORT`（ADR-0008）。
+一个 listener 在 engine 0 上，acceptor 用 `listener.accept_fd()` 拿原始 fd，`scheduler::submit(serve(fd))` 轮转放置；`serve` 在目标 engine 上首次执行（`current_engine()->ring()`），此后绑定。不使用 `SO_REUSEPORT`（ADR-0008）。
 
 代价与边界：acceptor 单线程且与 engine 0 共用线程；每条连接一次跨线程入队 + 唤醒；队列满按 ADR-0004 丢连接并关 fd。关停仍只 cancel listener，而仍打开的连接（idle recv）会让 `stop()` 等到它们结束。trace 里 accept 与 echo 分属两条线程轨道。
 
@@ -170,7 +171,7 @@ include/llco/
 2. **入口只有一个**：拆开的模块由 `*.decl.hpp` 末尾 `#include <llco/.../同模块.impl.hpp>` 收口；`*.impl.hpp` 顶部反过来 include `.decl.hpp`（`#pragma once` 兜住循环）。用户永远只 include `.decl.hpp`，不存在"忘了 include impl 导致链接错误"。
 3. **非模板函数必须 `inline`**：写在类外的成员函数/自由函数都要 `inline`（类内定义不用）。engine、scheduler、trace 都是具体类（engine 不按队列参数化，只认 `queue_type`），所以 `*.impl.hpp` 里每个定义都要自己加 `inline`。
 4. **include 一律全路径**：内部头也写 `#include <llco/core/task.hpp>`，不用同目录相对写法。子目录里的相对写法会先在同一目录里找，M6/M7 就是这样撞上"找不到 attr.hpp"的。
-5. **聚合头文件只列用户会直接写到的类型**：`task`、`resume_on`、`engine`、`scheduler`、`sync_wait`。`attr`/`config`/`queue`/`concepts` 是内部依赖，trace/io 是可选重型模块，都不进聚合头文件；tests 保持精确 include，用来验证每个头文件自包含。
+5. **聚合头文件只列用户会直接写到的类型**：`task`、`resume_on`、`engine`、`scheduler`、`run`、`sync_wait`。`attr`/`config`/`queue`/`concepts` 是内部依赖，trace/io 是可选重型模块，都不进聚合头文件；tests 保持精确 include，用来验证每个头文件自包含。
 
 ## 模块替换
 

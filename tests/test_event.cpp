@@ -121,7 +121,7 @@ TEST(event, set_before_wait_completes_immediately) {
 }
 
 TEST(event, value_reaches_the_waiter) {
-    engine    e;
+    engine     e;
     event<int> ev;
     int        value = 0;
 
@@ -168,7 +168,7 @@ TEST(event, set_posts_even_on_the_same_engine) {
 }
 
 TEST(event, wakes_a_waiter_on_its_own_engine) {
-    scheduler                    s{2};
+    scheduler::init(2);
     event<int>                   ev;
     std::atomic<std::thread::id> before{};
     std::atomic<std::thread::id> after{};
@@ -176,12 +176,12 @@ TEST(event, wakes_a_waiter_on_its_own_engine) {
     std::atomic<bool>            armed{false};
     std::atomic<bool>            done{false};
 
-    ASSERT_TRUE(s.engine_at(0).spawn(thread_waiter(&ev, &before, &after, &value, &armed)));
-    ASSERT_TRUE(s.engine_at(1).spawn(thread_setter(&ev, &armed, &done)));
+    ASSERT_TRUE(scheduler::engine_at(0).spawn(thread_waiter(&ev, &before, &after, &value, &armed)));
+    ASSERT_TRUE(scheduler::engine_at(1).spawn(thread_setter(&ev, &armed, &done)));
 
     while (!done.load())
         std::this_thread::sleep_for(POLL);
-    s.stop();
+    scheduler::stop();
 
     EXPECT_EQ(value.load(), CROSS_ENGINE_VALUE);
     EXPECT_EQ(before.load(), after.load()) << "the waiter must resume on its own engine";

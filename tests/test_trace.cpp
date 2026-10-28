@@ -99,9 +99,9 @@ TEST(trace, keeps_one_lane_per_thread) {
 }
 
 #if LLCO_TRACE
+#include <llco/core/task.hpp>
 #include <llco/runtime/engine.decl.hpp>
 #include <llco/runtime/scheduler.decl.hpp>
-#include <llco/core/task.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -137,13 +137,13 @@ TEST(trace, engine_emits_resume_slices) {
 }
 
 TEST(trace, scheduler_names_lanes) {
-    scheduler        s{2};
+    scheduler::init(2);
     std::atomic<int> done{0};
     for (int i = 0; i < 4; ++i)
-        ASSERT_TRUE(s.submit(touch(&done)));
+        ASSERT_TRUE(scheduler::submit(touch(&done)));
     while (done.load() < 4)
         std::this_thread::sleep_for(LANE_POLL);
-    s.stop();
+    scheduler::stop();
 
     ASSERT_TRUE(trace::flush(TRACE_PATH)) << "flush could not write the file";
     const auto json = slurp(TRACE_PATH);

@@ -33,9 +33,9 @@ void on_signal(int) {
 }
 
 // Echoes one connection; the scheduler already placed it on this engine.
-task<> echo(scheduler *s, int fd, std::vector<std::atomic<unsigned>> *landed) {
-    for (unsigned i = 0; i < s->size(); ++i)
-        if (&s->engine_at(i) == current_engine())
+task<> echo(int fd, std::vector<std::atomic<unsigned>> *landed) {
+    for (unsigned i = 0; i < scheduler::size(); ++i)
+        if (&scheduler::engine_at(i) == current_engine())
             (*landed)[i].fetch_add(1);
     net::connection         conn{current_engine()->ring(), fd};
     std::array<char, CHUNK> buffer{};
@@ -54,8 +54,7 @@ task<> echo(scheduler *s, int fd, std::vector<std::atomic<unsigned>> *landed) {
 }
 
 // Runs on engine 0: accepts, then lets the scheduler place the connection.
-task<> accept_loop(scheduler *s, net::listener *listener,
-                   std::vector<std::atomic<unsigned>> *landed) {
+task<> accept_loop(net::listener *listener, std::vector<std::atomic<unsigned>> *landed) {
     for (;;) {
         const auto accepted = co_await listener->accept_fd();
         if (!accepted) {
@@ -65,7 +64,7 @@ task<> accept_loop(scheduler *s, net::listener *listener,
             continue;
         }
         std::println("[accept] fd {}", *accepted);
-        if (!s->submit(echo(s, *accepted, landed)))
+        if (!scheduler::submit(echo(*accepted, landed)))
             std::println("[accept] queue full, connection dropped");
         // A connection can land between the signal and the cancel; leave instead of arming
         // another accept that nothing would ever interrupt.
@@ -75,8 +74,8 @@ task<> accept_loop(scheduler *s, net::listener *listener,
 }
 
 // Runs on the acceptor's engine: the cancel belongs to that ring.
-task<> stop_accept(scheduler *s, net::listener *listener) {
-    co_await resume_on(s->engine_at(0));
+task<> stop_accept(net::listener *listener) {
+    co_await resume_on(scheduler::engine_at(0));
     const auto canceled = co_await listener->cancel();
     std::println("[cancel] listener {}: {}", listener->fd(),
                  (canceled && *canceled) ? "canceled" : "already idle");
@@ -88,20 +87,20 @@ int main() {
     std::signal(SIGINT, on_signal);  // NOLINT(cert-err33-c): a demo has nothing to do if this fails
     std::signal(SIGTERM, on_signal); // NOLINT(cert-err33-c): same
 
-    scheduler                         s{ENGINE_COUNT};
-    net::listener                     listener{s.engine_at(0).ring(), PORT};
+    scheduler::init(ENGINE_COUNT);
+    net::listener                      listener{scheduler::engine_at(0).ring(), PORT};
     std::vector<std::atomic<unsigned>> landed(ENGINE_COUNT);
-    std::println("[listen] 127.0.0.1:{} on {} engines", listener.port(), s.size());
+    std::println("[listen] 127.0.0.1:{} on {} engines", listener.port(), scheduler::size());
 
-    if (!s.engine_at(0).spawn(accept_loop(&s, &listener, &landed)))
+    if (!scheduler::engine_at(0).spawn(accept_loop(&listener, &landed)))
         return 1;
 
     while (g_interrupted == 0)
         std::this_thread::sleep_for(STOP_POLL);
 
-    sync_wait(stop_accept(&s, &listener));
-    s.stop(); // waits for live connections too: close them before Ctrl-C
-    for (unsigned i = 0; i < s.size(); ++i)
+    sync_wait(stop_accept(&listener));
+    scheduler::stop(); // waits for live connections too: close them before Ctrl-C
+    for (unsigned i = 0; i < scheduler::size(); ++i)
         std::println("[stop] engine {}: {} connections, {} loops", i, landed[i].load(),
-                     s.engine_at(i).loop_count());
+                     scheduler::engine_at(i).loop_count());
 }

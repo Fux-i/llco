@@ -48,33 +48,33 @@ int main(int argc, char **argv) {
     trace::set_thread_name("main");
 
     const auto begin = std::chrono::steady_clock::now();
-    scheduler  s{ENGINE_COUNT};
-    census     state;
+    scheduler::init(ENGINE_COUNT);
+    census state;
 
     for (unsigned i = 0; i < TASK_COUNT; ++i) {
-        if (!s.submit(work(&state)))
+        if (!scheduler::submit(work(&state)))
             std::cout << "[main] submit " << i << " rejected\n";
     }
     while (state.done.load() < TASK_COUNT)
         std::this_thread::sleep_for(POLL);
 
     std::atomic<int> resumed{0};
-    if (!s.engine_at(0).spawn(resuming(&s.engine_at(1), &resumed)))
+    if (!scheduler::engine_at(0).spawn(resuming(&scheduler::engine_at(1), &resumed)))
         std::cout << "[main] resume_on task rejected\n";
     while (resumed.load() == 0)
         std::this_thread::sleep_for(POLL);
 
-    s.stop();
+    scheduler::stop();
     const auto elapsed = std::chrono::steady_clock::now() - begin;
     std::cout << "[main] " << state.done.load() << '/' << TASK_COUNT << " tasks done in "
               << std::chrono::duration<double, std::milli>(elapsed).count() << " ms\n";
 
     for (const auto &[tid, count] : state.per_thread)
         std::cout << "[main]   thread " << tid << " ran " << count << " task(s)\n";
-    for (unsigned i = 0; i < s.size(); ++i)
-        std::cout << "[main] engine " << i << ": loops " << s.engine_at(i).loop_count()
-                  << ", wakeups " << s.engine_at(i).wakeup_count() << ", queued "
-                  << s.engine_at(i).load() << '\n';
+    for (unsigned i = 0; i < scheduler::size(); ++i)
+        std::cout << "[main] engine " << i << ": loops " << scheduler::engine_at(i).loop_count()
+                  << ", wakeups " << scheduler::engine_at(i).wakeup_count() << ", queued "
+                  << scheduler::engine_at(i).load() << '\n';
 
     if (args.size() > 1) {
         const bool written = trace::flush(args[1]);

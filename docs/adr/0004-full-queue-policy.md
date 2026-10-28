@@ -1,6 +1,6 @@
 # 队列满时对外返回失败，resume_on 回退为内联继续
 
-队列有界。外部提交路径（`engine.add` / `scheduler.submit`）在 `try_push` 返回 false 时把失败交回调用者：engine 自己既不重试也不终止进程，换一个 engine 重试是 scheduler 的职责。协程内部的注入路径（`resume_on`）无法返回失败——协程已经挂起——因此约定：`try_push` 失败就由当前线程直接继续执行它（对称传递返回自己的句柄）。永不阻塞、永不丢失，也不引入无界后备队列。
+队列有界。外部提交路径（`engine.add` / `scheduler::submit`）在 `try_push` 返回 false 时把失败交回调用者：engine 自己既不重试也不终止进程，换一个 engine 重试是 scheduler 的职责。协程内部的注入路径（`resume_on`）无法返回失败——协程已经挂起——因此约定：`try_push` 失败就由当前线程直接继续执行它（对称传递返回自己的句柄）。永不阻塞、永不丢失，也不引入无界后备队列。
 
 ## Considered Options
 

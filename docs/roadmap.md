@@ -298,7 +298,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 1. `queue::size()` 转发 `was_size()`，`engine::load()` 返回它——只给测试与 demo 观测积压，不是放置的输入。
 2. `engine::try_adopt(handle)`：接受已 `release()` 的帧，失败时**不**销毁；`spawn` 改成 `release` → `try_adopt` → 失败才 `destroy`（ADR-0004 已订正）。
-3. `scheduler(unsigned n = hardware_concurrency())`：拥有 `vector<unique_ptr<engine>>`，构造即启动（`n == 0` 夹到 1）；`submit` 从 `m_next.fetch_add(1) % n` 起沿环扫一圈，整圈都满才 `destroy()` 并返回 false。没有策略接口、没有 `least_loaded`（ADR-0005）。
+3. `scheduler`：进程内单例（ADR-0010），`vector<unique_ptr<engine>>`，`init(n)` 重建池（`n == 0` 夹到 1）；`submit` 从 `m_next.fetch_add(1) % n` 起沿环扫一圈，整圈都满才 `destroy()` 并返回 false。没有策略接口、没有 `least_loaded`（ADR-0005）。
 4. 跨 engine 继续执行走 M3 的 `resume_on`；trace 给每个 engine 的线程轨道命名 `engine-i`（只在 `LLCO_TRACE` 构建里存在；不做 flow 箭头，原因见 `docs/ig_/M8`）。
 
 **完成标志**：`./build/bin/scheduler` 把 1000 个任务均分到 4 条线程，跨引擎继续执行前后线程 id 不同；`./scripts/trace.sh scheduler` 出的 trace 里能看到 `main` + `engine-0..3` 五条线程轨道与 `resume` 切片；四套构建 ctest 全绿（default 36、asan 36、trace 38、gcc 36）。
@@ -311,7 +311,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 - **测试别用 `std::array` + 运行时下标**：`cppcoreguidelines-pro-bounds-constant-array-index` 会报；最后改成一个共享 `started` 计数，连"每引擎一个标志"的数组都不需要。
 - **线程轨道命名必须是编译期分支**：默认构建里留 `set_thread_name` 调用，等于每个引擎线程照样登记一条线程轨道、照样产生事件，无故付出开销。整段包进 `#if LLCO_TRACE`，生产构建里没有成员、没有方法、循环里也没有那一行。
 - **`n == 0` 是除零 UB**：构造里夹到 1。
-- scheduler 是普通实例，不是单例（ADR-0002）；engine 数量为 1 时满载路径也要可测。
+- scheduler 是进程内单例（ADR-0010）：每个用例开头 `scheduler::init(n)`，`stop()` 之后 `submit` 返回 false；engine 数量为 1 时满载路径也要可测。
 
 ---
 
@@ -511,7 +511,7 @@ $ ./build/bin/echo_server
 **实现顺序**
 
 1. `listener::accept_fd()`（3 行，和 `cancel()` 对称）。
-2. 测试里的 acceptor：`accept_fd()` → `scheduler.submit(serve(fd))`；`serve` 用 `current_engine()->ring()` 构造 connection。测试只用一个顺序连接的 client 任务，保证 serve 的 submit 连续、放置可断言。
+2. 测试里的 acceptor：`accept_fd()` → `scheduler::submit(serve(fd))`；`serve` 用 `current_engine()->ring()` 构造 connection。测试只用一个顺序连接的 client 任务，保证 serve 的 submit 连续、放置可断言。
 3. demo 改 4 engine，打印每 engine 的连接数与 loop 数；SIGINT 路径保持"cancel → stop"。
 4. ADR-0008 + 文档。
 
@@ -534,7 +534,7 @@ $ ./build/bin/echo_server
 - `io::recv` / `io::send` 加了 `std::span<char>` 与 `std::string_view` 重载，调用点不再写 `std::as_writable_bytes(...)`。
 - `net::connection` / `net::listener`：把 `ring` 和 fd 收进对象，`co_await conn.recv(buffer)` / `co_await listener.accept()`（结果直接是 `connection`）；fd 由析构关闭，`listener.cancel()` 负责打断 pending accept。`echo_server` 从 105 行降到 96 行，回显循环里不再出现 `ring()`。
 - 不动的：`io::` 层的显式 `ring&` 契约、ADR-0006 的分发路径、`stop()` 语义、`llco.hpp` 聚合头文件（io/net 仍不进聚合头文件）。
-- 四套构建现在：default 69、asan 69、trace 71、gcc 69（M12 完成时是 66/66/68/66，这轮加了 3 条用例）。
+- 四套构建现在：default 73、asan 73、trace 75、gcc 73（M12 完成时是 66/66/68/66；这轮加了 3 条用例，ADR-0010 又加了 2 条）。
 
 ---
 

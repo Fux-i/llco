@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 #include <llco/config.hpp>
-#include <llco/runtime/engine.decl.hpp>
 #include <llco/core/resume_on.hpp>
-#include <llco/runtime/scheduler.decl.hpp>
 #include <llco/core/task.hpp>
+#include <llco/runtime/engine.decl.hpp>
+#include <llco/runtime/scheduler.decl.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -50,15 +50,16 @@ TEST(resume_on, requeues_to_target_engine) {
 }
 
 TEST(resume_on, cross_engine_resume_changes_thread) {
-    scheduler                    s{2};
+    scheduler::init(2);
     std::atomic<std::thread::id> before{};
     std::atomic<std::thread::id> after{};
     std::atomic<bool>            done{false};
 
-    ASSERT_TRUE(s.engine_at(0).spawn(thread_resumer(&s.engine_at(1), &before, &after, &done)));
+    ASSERT_TRUE(scheduler::engine_at(0).spawn(
+        thread_resumer(&scheduler::engine_at(1), &before, &after, &done)));
     while (!done.load())
         std::this_thread::sleep_for(POLL);
-    s.stop();
+    scheduler::stop();
 
     const auto main_id = std::this_thread::get_id();
     EXPECT_NE(before.load(), main_id) << "the task did not start on an engine thread";

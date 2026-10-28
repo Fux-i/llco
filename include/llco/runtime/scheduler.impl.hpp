@@ -7,9 +7,26 @@
 
 namespace llco {
 
+inline auto scheduler::instance() -> scheduler & {
+    static scheduler sc{std::thread::hardware_concurrency()};
+    return sc;
+}
+
 inline scheduler::scheduler(unsigned count) {
+    start(count);
+}
+
+inline scheduler::~scheduler() {
+    halt();
+}
+
+inline void scheduler::start(unsigned count) {
+    halt();
     if (count == 0)
         count = 1;
+    m_engines.clear();
+    m_next    = 0;
+    m_running = true;
     m_engines.reserve(count);
     for (unsigned i = 0; i < count; ++i) {
         m_engines.push_back(std::make_unique<engine>());
@@ -20,31 +37,41 @@ inline scheduler::scheduler(unsigned count) {
     }
 }
 
-inline scheduler::~scheduler() {
-    stop();
-}
-
-inline void scheduler::stop() {
+inline void scheduler::halt() {
+    m_running = false;
     for (auto &e : m_engines)
         e->stop();
 }
 
-inline auto scheduler::size() const noexcept -> unsigned {
-    return static_cast<unsigned>(m_engines.size());
+inline void scheduler::init(unsigned count) {
+    instance().start(count);
+}
+
+inline void scheduler::stop() {
+    instance().halt();
+}
+
+inline auto scheduler::size() -> unsigned {
+    return static_cast<unsigned>(instance().m_engines.size());
 }
 
 inline auto scheduler::engine_at(unsigned index) -> engine & {
-    return *m_engines[index];
+    return *instance().m_engines[index];
 }
 
 template <class T>
-auto scheduler::submit(task<T> &&t) noexcept -> bool {
+auto scheduler::submit(task<T> &&t) -> bool {
+    auto &s = instance();
+    if (!s.m_running) {
+        t.release().destroy();
+        return false;
+    }
+    const auto count  = static_cast<unsigned>(s.m_engines.size());
     auto       handle = t.release();
-    const auto count  = size();
-    const auto first  = m_next.fetch_add(1, std::memory_order_relaxed) % count;
+    const auto first  = s.m_next.fetch_add(1, std::memory_order_relaxed) % count;
     // One frame, one lap: a full engine passes it on (ADR-0004).
     for (unsigned lap = 0; lap < count; ++lap) {
-        if (m_engines[(first + lap) % count]->try_adopt(handle))
+        if (s.m_engines[(first + lap) % count]->try_adopt(handle))
             return true;
     }
     handle.destroy();

@@ -10,34 +10,44 @@
 
 namespace llco {
 
-// N engines plus the placement policy: round robin over their queues (ADR-0005).
+// The process-wide scheduler: N engines and the round-robin placement policy (ADR-0010).
 class scheduler {
   private:
     std::vector<std::unique_ptr<engine>> m_engines;
     std::atomic<unsigned>                m_next{0};
+    bool                                 m_running{false};
 
-  public:
-    // starts every engine; count 0 means a single engine
-    explicit scheduler(unsigned count = std::thread::hardware_concurrency());
+    explicit scheduler(unsigned count);
     ~scheduler();
     CLASS_NO_COPY_MOVE(scheduler);
 
-    // stops every engine, each draining what was already queued; submitting afterwards is a bug
-    void stop();
+    static auto instance() -> scheduler &;
 
-    auto size() const noexcept -> unsigned;
+    void start(unsigned count);
+    void halt();
 
-    auto engine_at(unsigned index) -> engine &;
+  public:
+    // (Re)builds the pool, stopping whatever was already running; count 0 means a single engine.
+    static void init(unsigned count = std::thread::hardware_concurrency());
 
-    // picks an engine and hands the frame over; false when every queue is full
+    // Stops every engine, each draining what was already queued; submit afterwards returns false.
+    // The engines stay readable for their counters until the next init().
+    static void stop();
+
+    // engines in the pool; also after stop()
+    static auto size() -> unsigned;
+
+    // index must be below size(); tests and demos reach the rings here
+    static auto engine_at(unsigned index) -> engine &;
+
+    // picks an engine and hands the frame over; false when stopped or every queue is full
     template <class T>
     [[LLCO_DISCARD_HINT]]
-    auto submit(task<T> &&t) noexcept -> bool;
+    static auto submit(task<T> &&t) -> bool;
 
-    // submits every task; throws std::runtime_error on the first rejection (ADR-0004 destroys
-    // that frame, and the tasks already accepted keep running)
+    // submits every task; throws std::runtime_error on the first rejection (ADR-0004)
     template <class... T>
-    void run(task<T> &&...tasks);
+    static void run(task<T> &&...tasks);
 };
 
 } // namespace llco

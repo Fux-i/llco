@@ -13,7 +13,7 @@ _Avoid_: executor, worker, event loop
 _Avoid_: fake engine, mock engine
 
 **scheduler**:
-拥有多个 engine、并按放置策略把任务交给其中一个的组件。
+进程内唯一的组件，拥有多个 engine、并按放置策略把任务交给其中一个；`scheduler::init(n)` 建池并可重建（ADR-0010）。
 _Avoid_: dispatcher, thread pool, balancer
 
 **acceptor**:

@@ -5,6 +5,7 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <llco/core/resume_on.hpp>
 #include <llco/io/io_uring.decl.hpp>
 #include <llco/llco.hpp>
@@ -38,17 +39,16 @@ task<> echo(scheduler *s, int fd, std::vector<std::atomic<unsigned>> *landed) {
             (*landed)[i].fetch_add(1);
     net::connection         conn{current_engine()->ring(), fd};
     std::array<char, CHUNK> buffer{};
-    try {
-        for (;;) {
-            const auto bytes = co_await conn.recv(buffer);
-            if (bytes == 0)
-                break;
-            (void)co_await conn.send(std::string_view{buffer.data(), bytes});
-            std::println("[echo] {} bytes", bytes);
+    for (;;) {
+        const auto bytes = co_await conn.recv(buffer);
+        if (!bytes) {
+            std::println("[echo] {}", bytes.error().message()); // a peer reset is normal here
+            break;
         }
-    } catch (const std::system_error &error) {
-        // a peer reset is normal here; the fd still has to go
-        std::println("[echo] {}", error.what());
+        if (*bytes == 0)
+            break;
+        (void)co_await conn.send(std::string_view{buffer.data(), *bytes});
+        std::println("[echo] {} bytes", *bytes);
     }
     conn.shutdown();
 }
@@ -57,16 +57,16 @@ task<> echo(scheduler *s, int fd, std::vector<std::atomic<unsigned>> *landed) {
 task<> accept_loop(scheduler *s, net::listener *listener,
                    std::vector<std::atomic<unsigned>> *landed) {
     for (;;) {
-        try {
-            const int fd = co_await listener->accept_fd();
-            std::println("[accept] fd {}", fd);
-            if (!s->submit(echo(s, fd, landed)))
-                std::println("[accept] queue full, connection dropped");
-        } catch (const std::system_error &error) {
-            if (error.code().value() == ECANCELED)
+        const auto accepted = co_await listener->accept_fd();
+        if (!accepted) {
+            if (accepted.error() == std::errc::operation_canceled)
                 co_return;
-            throw;
+            std::println("[accept] {}", accepted.error().message());
+            continue;
         }
+        std::println("[accept] fd {}", *accepted);
+        if (!s->submit(echo(s, *accepted, landed)))
+            std::println("[accept] queue full, connection dropped");
         // A connection can land between the signal and the cancel; leave instead of arming
         // another accept that nothing would ever interrupt.
         if (g_interrupted != 0)
@@ -77,8 +77,9 @@ task<> accept_loop(scheduler *s, net::listener *listener,
 // Runs on the acceptor's engine: the cancel belongs to that ring.
 task<> stop_accept(scheduler *s, net::listener *listener) {
     co_await resume_on(s->engine_at(0));
-    const bool canceled = co_await listener->cancel();
-    std::println("[cancel] listener {}: {}", listener->fd(), canceled ? "canceled" : "already idle");
+    const auto canceled = co_await listener->cancel();
+    std::println("[cancel] listener {}: {}", listener->fd(),
+                 (canceled && *canceled) ? "canceled" : "already idle");
 }
 
 } // namespace

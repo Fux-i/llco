@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <span>
 #include <string_view>
 #include <system_error>
@@ -40,17 +41,27 @@ auto wait_until(Predicate done) -> bool {
 
 // One echo round trip through the wrappers: accept, read once, write it back.
 task<> echo_once(net::listener *listener, std::atomic<bool> *served) {
-    auto                 conn = co_await listener->accept();
+    auto accepted = co_await listener->accept();
+    EXPECT_TRUE(accepted) << accepted.error().message();
+    if (!accepted)
+        co_return;
+    auto                    conn = std::move(*accepted);
     std::array<char, CHUNK> buffer{};
-    const auto           bytes = co_await conn.recv(buffer);
-    (void)co_await conn.send(std::string_view{buffer.data(), bytes});
+    const auto              got = co_await conn.recv(buffer);
+    EXPECT_TRUE(got) << got.error().message();
+    if (!got)
+        co_return;
+    (void)co_await conn.send(std::string_view{buffer.data(), *got});
     served->store(true);
 }
 
 // Connects, sends the payload, then reads the echo back into reply.
 task<> echo_client(engine *e, std::uint16_t port, std::span<char> reply, std::atomic<bool> *done) {
     net::connection conn{e->ring(), net::tcp_socket()};
-    co_await io::connect(e->ring(), conn.fd(), net::loopback(port));
+    const auto      connected = co_await io::connect(e->ring(), conn.fd(), net::loopback(port));
+    EXPECT_TRUE(connected) << connected.error().message();
+    if (!connected)
+        co_return;
     (void)co_await conn.send(PAYLOAD);
     (void)co_await conn.recv(reply);
     done->store(true);
@@ -58,12 +69,9 @@ task<> echo_client(engine *e, std::uint16_t port, std::span<char> reply, std::at
 
 task<> connect_refused(engine *e, std::uint16_t port, std::atomic<int> *code,
                        std::atomic<bool> *done) {
-    const int fd = net::tcp_socket();
-    try {
-        co_await io::connect(e->ring(), fd, net::loopback(port));
-    } catch (const std::system_error &error) {
-        code->store(error.code().value());
-    }
+    const int  fd      = net::tcp_socket();
+    const auto refused = co_await io::connect(e->ring(), fd, net::loopback(port));
+    code->store(refused ? 0 : refused.error().value());
     done->store(true);
     ::close(fd);
 }
@@ -71,12 +79,20 @@ task<> connect_refused(engine *e, std::uint16_t port, std::atomic<int> *code,
 // Reads the payload, echoes it, then keeps reading: the peer's half close must read as EOF.
 task<> half_close_server(net::listener *listener, std::atomic<bool> *eof,
                          std::atomic<bool> *done) {
-    auto                 conn = co_await listener->accept();
+    auto accepted = co_await listener->accept();
+    EXPECT_TRUE(accepted) << accepted.error().message();
+    if (!accepted)
+        co_return;
+    auto                    conn = std::move(*accepted);
     std::array<char, CHUNK> buffer{};
-    const auto           bytes = co_await conn.recv(buffer);
-    (void)co_await conn.send(std::string_view{buffer.data(), bytes});
+    const auto              got = co_await conn.recv(buffer);
+    EXPECT_TRUE(got) << got.error().message();
+    if (!got)
+        co_return;
+    (void)co_await conn.send(std::string_view{buffer.data(), *got});
     const auto rest = co_await conn.recv(buffer);
-    eof->store(rest == 0);
+    EXPECT_TRUE(rest) << rest.error().message();
+    eof->store(rest && *rest == 0);
     done->store(true);
     conn.shutdown();
 }
@@ -85,13 +101,17 @@ task<> half_close_server(net::listener *listener, std::atomic<bool> *eof,
 task<> half_close_client(engine *e, std::uint16_t port, std::span<char> reply,
                          std::atomic<bool> *eof, std::atomic<bool> *done) {
     net::connection conn{e->ring(), net::tcp_socket()};
-    co_await io::connect(e->ring(), conn.fd(), net::loopback(port));
+    const auto      connected = co_await io::connect(e->ring(), conn.fd(), net::loopback(port));
+    EXPECT_TRUE(connected) << connected.error().message();
+    if (!connected)
+        co_return;
     (void)co_await conn.send(PAYLOAD);
     conn.shutdown();
     (void)co_await conn.recv(reply);
     std::array<char, SPARE> spare{};
-    const auto          rest = co_await conn.recv(spare);
-    eof->store(rest == 0);
+    const auto              rest = co_await conn.recv(spare);
+    EXPECT_TRUE(rest) << rest.error().message();
+    eof->store(rest && *rest == 0);
     done->store(true);
 }
 

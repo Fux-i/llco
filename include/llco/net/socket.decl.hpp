@@ -4,8 +4,10 @@
 
 #include <coroutine>
 #include <cstdint>
+#include <expected>
 #include <span>
 #include <string_view>
+#include <system_error>
 
 #include <netinet/in.h>
 
@@ -64,7 +66,7 @@ class listener {
         accepting(io::ring &ring, int listener_fd) noexcept;
         auto await_ready() const noexcept -> bool;
         void await_suspend(std::coroutine_handle<> handle);
-        auto await_resume() -> connection;
+        auto await_resume() -> std::expected<connection, std::error_code>;
     };
 
   private:

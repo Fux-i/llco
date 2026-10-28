@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <expected>
 #include <span>
 #include <string_view>
 #include <system_error>
@@ -26,6 +27,10 @@ using namespace llco;
 using namespace std::chrono_literals;
 
 namespace {
+
+// The io awaiters report kernel errors as values; tests assert on them directly.
+template <class T>
+using io_result = std::expected<T, std::error_code>;
 
 // How long a test waits for a completion to show up.
 constexpr auto BUDGET        = 1s;
@@ -70,7 +75,7 @@ auto wait_for_completions(engine &e, std::size_t expected) -> bool {
 constexpr std::string_view PAYLOAD = "hello";
 
 // A bare ring needs no engine: resume() arms the op, submit() hands it over, reap() completes it.
-task<std::size_t> read_once(io::ring *r, int fd, std::span<std::byte> buffer) {
+task<io_result<std::size_t>> read_once(io::ring *r, int fd, std::span<std::byte> buffer) {
     co_return co_await io::read(*r, fd, buffer);
 }
 
@@ -84,7 +89,7 @@ task<> write_once(io::ring *r, int fd, std::span<std::byte> buffer) {
     co_return;
 }
 
-task<std::size_t> recv_once(io::ring *r, int fd, std::span<std::byte> buffer) {
+task<io_result<std::size_t>> recv_once(io::ring *r, int fd, std::span<std::byte> buffer) {
     co_return co_await io::recv(*r, fd, buffer);
 }
 
@@ -98,20 +103,20 @@ task<> send_chars(io::ring *r, int fd, std::string_view payload) {
     co_return;
 }
 
-task<std::size_t> recv_chars(io::ring *r, int fd, std::span<char> buffer) {
+task<io_result<std::size_t>> recv_chars(io::ring *r, int fd, std::span<char> buffer) {
     co_return co_await io::recv(*r, fd, buffer);
 }
 
-task<int> accept_once(io::ring *r, int listener) {
+task<io_result<int>> accept_once(io::ring *r, int listener) {
     co_return co_await io::accept(*r, listener);
 }
 
-task<bool> cancel_once(io::ring *r, int fd) {
+task<io_result<bool>> cancel_once(io::ring *r, int fd) {
     co_return co_await io::cancel(*r, fd);
 }
 
-task<> connect_once(io::ring *r, int fd, ::sockaddr_in address) {
-    co_await io::connect(*r, fd, address);
+task<io_result<void>> connect_once(io::ring *r, int fd, ::sockaddr_in address) {
+    co_return co_await io::connect(*r, fd, address);
 }
 
 // A plain blocking client for the accept case; connect has its own async test below.
@@ -208,7 +213,9 @@ TEST(io, read_completes_with_bytes) {
     while (!t.handle().done())
         r.reap();
 
-    EXPECT_EQ(t.result(), PAYLOAD.size());
+    const auto got = t.result();
+    ASSERT_TRUE(got) << got.error().message();
+    EXPECT_EQ(*got, PAYLOAD.size());
     EXPECT_EQ(std::memcmp(buffer.data(), PAYLOAD.data(), PAYLOAD.size()), 0) << "wrong bytes";
     EXPECT_EQ(r.running_io(), 0U) << "the op was not uncounted";
 }
@@ -252,14 +259,9 @@ TEST(io, failed_op_propagates_negative_errno) {
     while (!t.handle().done())
         r.reap();
 
-    auto raised = false;
-    try {
-        (void)t.result();
-    } catch (const std::system_error &error) {
-        raised = true;
-        EXPECT_EQ(error.code().value(), EBADF);
-    }
-    EXPECT_TRUE(raised) << "a failed op did not raise";
+    const auto got = t.result();
+    ASSERT_FALSE(got) << "a failed op reported success";
+    EXPECT_EQ(got.error().value(), EBADF);
     EXPECT_EQ(r.running_io(), 0U);
 }
 
@@ -330,7 +332,9 @@ TEST(io, recv_send_char_overloads) {
     while (!received.handle().done())
         r.reap();
 
-    EXPECT_EQ(received.result(), PAYLOAD.size());
+    const auto got = received.result();
+    ASSERT_TRUE(got) << got.error().message();
+    EXPECT_EQ(*got, PAYLOAD.size());
     const std::string_view back{buffer.data(), buffer.size()};
     EXPECT_EQ(back, PAYLOAD);
     EXPECT_EQ(r.running_io(), 0U);
@@ -351,7 +355,9 @@ TEST(io, recv_returns_zero_at_eof) {
     r.submit();
     while (!first.handle().done())
         r.reap();
-    EXPECT_EQ(first.result(), PAYLOAD.size());
+    const auto first_got = first.result();
+    ASSERT_TRUE(first_got) << first_got.error().message();
+    EXPECT_EQ(*first_got, PAYLOAD.size());
 
     ::close(fds[1]); // the peer goes away: the next recv must report EOF, not an error
     auto eof = recv_once(&r, fds[0], std::as_writable_bytes(std::span{received}));
@@ -359,7 +365,9 @@ TEST(io, recv_returns_zero_at_eof) {
     r.submit();
     while (!eof.handle().done())
         r.reap();
-    EXPECT_EQ(eof.result(), 0U);
+    const auto eof_got = eof.result();
+    ASSERT_TRUE(eof_got) << eof_got.error().message();
+    EXPECT_EQ(*eof_got, 0U);
     EXPECT_EQ(r.running_io(), 0U);
 }
 
@@ -423,9 +431,10 @@ TEST(io, accept_returns_a_socket) {
     const int client = connect_blocking(net::local_port(listener));
     while (!t.handle().done())
         r.reap();
-    EXPECT_GE(t.result(), 0) << "the accept did not hand back a socket";
+    const auto got = t.result();
+    ASSERT_TRUE(got) << got.error().message() << " (the accept did not hand back a socket)";
     EXPECT_EQ(r.running_io(), 0U);
-    ::close(t.result());
+    ::close(*got);
     ::close(client);
     ::close(listener);
 }
@@ -442,7 +451,8 @@ TEST(io, connect_reaches_a_listener) {
     while (!t.handle().done())
         r.reap();
 
-    EXPECT_NO_THROW(t.result());
+    const auto connected = t.result();
+    ASSERT_TRUE(connected) << connected.error().message();
     const int accepted = ::accept(listener, nullptr, nullptr);
     EXPECT_GE(accepted, 0) << "the listener never saw the connection";
     ::close(accepted);
@@ -465,15 +475,13 @@ TEST(io, cancel_stops_a_pending_accept) {
     while (!pending.handle().done() || !canceller.handle().done())
         r.reap();
 
-    EXPECT_TRUE(canceller.result()) << "the cancel found nothing to cancel";
-    auto raised = false;
-    try {
-        (void)pending.result();
-    } catch (const std::system_error &error) {
-        raised = true;
-        EXPECT_EQ(error.code().value(), ECANCELED);
-    }
-    EXPECT_TRUE(raised) << "the cancelled accept did not raise";
+    const auto canceled = canceller.result();
+    ASSERT_TRUE(canceled) << canceled.error().message();
+    EXPECT_TRUE(*canceled) << "the cancel found nothing to cancel";
+
+    const auto got = pending.result();
+    ASSERT_FALSE(got) << "the cancelled accept reported success";
+    EXPECT_EQ(got.error().value(), ECANCELED);
     EXPECT_EQ(r.running_io(), 0U);
     ::close(listener);
 }

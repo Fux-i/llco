@@ -99,8 +99,11 @@ inline void listener::accepting::await_suspend(std::coroutine_handle<> handle) {
     m_op.await_suspend(handle);
 }
 
-inline auto listener::accepting::await_resume() -> connection {
-    return connection{*m_ring, m_op.await_resume()};
+inline auto listener::accepting::await_resume() -> std::expected<connection, std::error_code> {
+    auto fd = m_op.await_resume();
+    if (!fd)
+        return std::unexpected{fd.error()};
+    return connection{*m_ring, *fd};
 }
 
 inline listener::listener(io::ring &ring, std::uint16_t port) : m_ring{&ring}, m_fd{listen_tcp(port)} {}

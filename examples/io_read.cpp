@@ -24,7 +24,8 @@ constexpr auto PAYLOAD     = std::string_view{"hello"};
 // Reads one chunk on the engine thread; the loop flushes the SQE after drain().
 task<> read_once(engine *e, int fd, std::span<char> buffer, std::atomic<std::size_t> *bytes,
                  std::atomic<bool> *done) {
-    *bytes = co_await io::read(e->ring(), fd, std::as_writable_bytes(buffer));
+    const auto got = co_await io::read(e->ring(), fd, std::as_writable_bytes(buffer));
+    *bytes         = got.value_or(0);
     done->store(true);
 }
 

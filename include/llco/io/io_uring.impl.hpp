@@ -121,9 +121,9 @@ inline void rw_awaiter::await_suspend(std::coroutine_handle<> handle) {
     armed(*m_ring, handle);
 }
 
-inline auto rw_awaiter::await_resume() const -> std::size_t {
+inline auto rw_awaiter::await_resume() const noexcept -> std::expected<std::size_t, std::error_code> {
     if (m_result < 0)
-        throw std::system_error{-m_result, std::system_category(), "io_uring op"};
+        return std::unexpected{std::error_code{-m_result, std::system_category()}};
     return static_cast<std::size_t>(m_result);
 }
 
@@ -170,9 +170,9 @@ inline void accept_awaiter::await_suspend(std::coroutine_handle<> handle) {
     armed(*m_ring, handle);
 }
 
-inline auto accept_awaiter::await_resume() const -> int {
+inline auto accept_awaiter::await_resume() const noexcept -> std::expected<int, std::error_code> {
     if (m_result < 0)
-        throw std::system_error{-m_result, std::system_category(), "io_uring accept"};
+        return std::unexpected{std::error_code{-m_result, std::system_category()}};
     return m_result;
 }
 
@@ -192,9 +192,10 @@ inline void connect_awaiter::await_suspend(std::coroutine_handle<> handle) {
     armed(*m_ring, handle);
 }
 
-inline void connect_awaiter::await_resume() const {
+inline auto connect_awaiter::await_resume() const noexcept -> std::expected<void, std::error_code> {
     if (m_result < 0)
-        throw std::system_error{-m_result, std::system_category(), "io_uring connect"};
+        return std::unexpected{std::error_code{-m_result, std::system_category()}};
+    return {};
 }
 
 inline cancel_awaiter::cancel_awaiter(ring &owner, int fd) noexcept : m_ring{&owner}, m_fd{fd} {}
@@ -210,12 +211,12 @@ inline void cancel_awaiter::await_suspend(std::coroutine_handle<> handle) {
     armed(*m_ring, handle);
 }
 
-inline auto cancel_awaiter::await_resume() const -> bool {
-    if (m_result == 0)
-        return true;
+inline auto cancel_awaiter::await_resume() const noexcept -> std::expected<bool, std::error_code> {
     if (m_result == -ENOENT)
         return false;
-    throw std::system_error{-m_result, std::system_category(), "io_uring cancel"};
+    if (m_result < 0)
+        return std::unexpected{std::error_code{-m_result, std::system_category()}};
+    return true;
 }
 
 inline auto accept(ring &owner, int listener) -> accept_awaiter {

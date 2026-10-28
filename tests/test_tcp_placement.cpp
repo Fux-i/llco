@@ -46,8 +46,10 @@ task<> echo_counted(scheduler *s, int fd, std::vector<std::atomic<unsigned>> *la
             (*landed)[i].fetch_add(1);
     net::connection         conn{current_engine()->ring(), fd};
     std::array<char, CHUNK> buffer{};
-    const auto              bytes = co_await conn.recv(buffer);
-    (void)co_await conn.send(std::string_view{buffer.data(), bytes});
+    const auto              got = co_await conn.recv(buffer);
+    if (!got)
+        co_return;
+    (void)co_await conn.send(std::string_view{buffer.data(), *got});
 }
 
 // Accepts until stopped or cancelled; each connection is placed by the scheduler.
@@ -56,16 +58,14 @@ task<> accept_loop(scheduler *s, net::listener *listener, std::atomic<bool> *sto
     for (;;) {
         if (stop->load())
             co_return;
-        int fd = -1;
-        try {
-            fd = co_await listener->accept_fd();
-        } catch (const std::system_error &error) {
-            if (error.code().value() == ECANCELED)
+        const auto accepted = co_await listener->accept_fd();
+        if (!accepted) {
+            if (accepted.error() == std::errc::operation_canceled)
                 co_return;
-            throw;
+            continue;
         }
-        if (!s->submit(echo_counted(s, fd, landed)))
-            ::close(fd);
+        if (!s->submit(echo_counted(s, *accepted, landed)))
+            ::close(*accepted);
     }
 }
 
@@ -80,7 +80,11 @@ task<> stop_accept(scheduler *s, net::listener *listener) {
 task<> drive_clients(std::uint16_t port, unsigned count, std::atomic<unsigned> *echoed) {
     for (unsigned i = 0; i < count; ++i) {
         net::connection conn{current_engine()->ring(), net::tcp_socket()};
-        co_await io::connect(current_engine()->ring(), conn.fd(), net::loopback(port));
+        const auto      connected =
+            co_await io::connect(current_engine()->ring(), conn.fd(), net::loopback(port));
+        EXPECT_TRUE(connected) << connected.error().message();
+        if (!connected)
+            co_return;
         (void)co_await conn.send(PAYLOAD);
         std::array<char, PAYLOAD.size()> reply{};
         (void)co_await conn.recv(reply);

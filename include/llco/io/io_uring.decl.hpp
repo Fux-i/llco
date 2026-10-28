@@ -8,8 +8,10 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <span>
 #include <string_view>
+#include <system_error>
 
 #include <liburing.h>
 #include <netinet/in.h>
@@ -104,8 +106,8 @@ class [[LLCO_AWAIT_HINT]] rw_awaiter : public completion {
     // Arms the op but leaves the submit to the loop, which flushes the batch after drain().
     void await_suspend(std::coroutine_handle<> handle);
 
-    // Bytes transferred; a negative result is rethrown as std::system_error.
-    auto await_resume() const -> std::size_t;
+    // Bytes transferred; a kernel error comes back as an error_code, not a throw.
+    auto await_resume() const noexcept -> std::expected<std::size_t, std::error_code>;
 };
 
 // One accepted connection; await_resume hands back the new socket.
@@ -123,8 +125,8 @@ class [[LLCO_AWAIT_HINT]] accept_awaiter : public completion {
     // Arms the accept but leaves the submit to the loop, like every other op.
     void await_suspend(std::coroutine_handle<> handle);
 
-    // The new socket; a negative result is rethrown as std::system_error.
-    auto await_resume() const -> int;
+    // The new socket; a kernel error comes back as an error_code, not a throw.
+    auto await_resume() const noexcept -> std::expected<int, std::error_code>;
 };
 
 // One outbound connection; the address must outlive the awaiter.
@@ -143,8 +145,8 @@ class [[LLCO_AWAIT_HINT]] connect_awaiter : public completion {
     // Arms the connect but leaves the submit to the loop.
     void await_suspend(std::coroutine_handle<> handle);
 
-    // Returns once the connection is up; a negative result is rethrown as std::system_error.
-    void await_resume() const;
+    // Completes once the connection is up; a kernel error comes back as an error_code.
+    auto await_resume() const noexcept -> std::expected<void, std::error_code>;
 };
 
 // One cancellation request for whatever is in flight on a descriptor.
@@ -162,8 +164,8 @@ class [[LLCO_AWAIT_HINT]] cancel_awaiter : public completion {
     // Arms the cancel but leaves the submit to the loop.
     void await_suspend(std::coroutine_handle<> handle);
 
-    // True when something was cancelled; false when nothing was in flight, which is not an error.
-    auto await_resume() const -> bool;
+    // True when something was cancelled, false when nothing was in flight; check has_value() first.
+    auto await_resume() const noexcept -> std::expected<bool, std::error_code>;
 };
 
 // Reads into buffer; it must be co_awaited on the ring's owner thread.

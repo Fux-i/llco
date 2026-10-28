@@ -48,6 +48,6 @@ int main() {
     std::println("[wake] woke after {:.0f} ms, completions: {}", elapsed, e.ring().completions());
 
     e.stop();
-    std::println("[stop] {} loop iterations: idle start, doorbell, completion, stop",
+    std::println("[stop] {} loop iterations: idle start, wakeup, completion, stop",
                  e.loop_count());
 }

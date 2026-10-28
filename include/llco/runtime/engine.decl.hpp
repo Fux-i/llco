@@ -34,7 +34,7 @@ class engine {
     std::jthread                            m_thread;
     std::optional<io::ring>                 m_ring;
     std::atomic<int>                        m_event_fd{-1};
-    std::atomic<bool>                       m_sleeping{false};
+    std::atomic<bool>                       m_idle{false};
 #if LLCO_TRACE
     std::string m_lane;
 #endif
@@ -56,7 +56,7 @@ class engine {
     // loop iterations so far; read it after stop()
     auto loop_count() const noexcept -> std::size_t;
 
-    // doorbell writes so far; read it after stop()
+    // wakeups so far; read it after stop()
     auto wakeup_count() const noexcept -> std::size_t;
 
     // handles queued but not yet resumed; a sample, not a precise load

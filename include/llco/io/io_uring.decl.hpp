@@ -51,7 +51,8 @@ class ring {
     [[LLCO_DISCARD_HINT]]
     auto pending() const noexcept -> unsigned;
 
-    // SQEs filled but not handed to the kernel yet; blocking while this is non-zero strands them.
+    // SQEs filled but not handed to the kernel yet; blocking while this is non-zero leaves
+    // them unsubmitted.
     [[LLCO_DISCARD_HINT]]
     auto sq_pending() const noexcept -> unsigned;
 
@@ -62,7 +63,7 @@ class ring {
     // Completions reaped so far; readable from any thread.
     auto completions() const noexcept -> std::size_t;
 
-    // Ops armed but not home yet, submitted or not; readable from any thread.
+    // Ops armed but not completed yet, submitted or not; readable from any thread.
     auto running_io() const noexcept -> unsigned;
 
     friend class completion;

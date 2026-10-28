@@ -11,16 +11,16 @@ using namespace llco;
 
 namespace {
 
-constexpr int HOP_VALUE = 7;
+constexpr int TARGET_VALUE = 7;
 
 task<> work(std::atomic<int> *done) {
     ++*done;
     co_return;
 }
 
-task<int> hopping(engine *target) {
+task<int> resuming(engine *target) {
     co_await resume_on(*target);
-    co_return HOP_VALUE;
+    co_return TARGET_VALUE;
 }
 
 } // namespace
@@ -47,7 +47,7 @@ int main() {
         if (!engines[i % engine_count]->spawn(work(&done)))
             std::cout << "[main] engine " << i % engine_count << " rejected a task\n";
     }
-    std::cout << "[main] sync_wait across engines -> " << sync_wait(hopping(engines[0].get()))
+    std::cout << "[main] sync_wait across engines -> " << sync_wait(resuming(engines[0].get()))
               << '\n';
 
     for (auto &e : engines)
@@ -58,5 +58,5 @@ int main() {
               << std::chrono::duration<double, std::milli>(elapsed).count() << " ms\n";
     for (unsigned i = 0; i < engine_count; ++i)
         std::cout << "[main] engine " << i << " loop iterations: " << engines[i]->loop_count()
-                  << ", doorbells: " << engines[i]->wakeup_count() << '\n';
+                  << ", wakeups: " << engines[i]->wakeup_count() << '\n';
 }

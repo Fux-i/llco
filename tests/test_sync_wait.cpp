@@ -10,7 +10,7 @@ using namespace llco;
 
 namespace {
 
-constexpr int HOP_VALUE = 7;
+constexpr int TARGET_VALUE = 7;
 
 task<int> value_task(int value) {
     co_return value;
@@ -21,9 +21,9 @@ task<int> failing_task() {
     co_return 0;
 }
 
-task<int> hopping_task(engine *target) {
+task<int> resuming_task(engine *target) {
     co_await resume_on(*target);
-    co_return HOP_VALUE;
+    co_return TARGET_VALUE;
 }
 
 } // namespace
@@ -37,9 +37,9 @@ TEST(sync_wait, propagates_exception) {
     EXPECT_THROW(sync_wait(failing_task()), std::runtime_error);
 }
 
-TEST(sync_wait, waits_for_cross_thread_hop) {
+TEST(sync_wait, waits_for_cross_thread_resume) {
     engine e;
     e.start();
-    EXPECT_EQ(sync_wait(hopping_task(&e)), HOP_VALUE);
+    EXPECT_EQ(sync_wait(resuming_task(&e)), TARGET_VALUE);
     e.stop();
 }

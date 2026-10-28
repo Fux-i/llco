@@ -57,7 +57,7 @@ TEST(threaded_engine, idle_does_not_spin) {
     std::this_thread::sleep_for(idle_time);
     e.stop();
 
-    EXPECT_EQ(e.loop_count(), 2U) << "an idle loop must sleep between wakeups";
+    EXPECT_EQ(e.loop_count(), 2U) << "an idle loop must block between wakeups";
 }
 
 TEST(threaded_engine, stop_wakes_idle_thread) {
@@ -72,7 +72,7 @@ TEST(threaded_engine, stop_wakes_idle_thread) {
     e.stop();
     const auto elapsed = std::chrono::steady_clock::now() - begin;
 
-    EXPECT_LT(elapsed, budget) << "stop did not wake the sleeping thread";
+    EXPECT_LT(elapsed, budget) << "stop did not wake the blocked thread";
 }
 
 TEST(threaded_engine, destructor_drains_queued_tasks) {

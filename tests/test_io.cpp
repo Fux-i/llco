@@ -162,13 +162,13 @@ TEST(io, nop_completion_wakes_engine) {
     EXPECT_EQ(e.ring().completions(), 1U);
 }
 
-TEST(io, doorbell_wake_with_empty_cq_is_harmless) {
+TEST(io, wake_with_empty_cq_is_harmless) {
     engine           e;
     std::atomic<int> done{0};
     e.start();
 
     std::this_thread::sleep_for(SETTLE); // idle: blocked on read(eventfd)
-    ASSERT_TRUE(e.spawn(touch(&done)));  // doorbell rings with an empty CQ
+    ASSERT_TRUE(e.spawn(touch(&done)));  // a wakeup with an empty CQ
     std::this_thread::sleep_for(SETTLE);
     ASSERT_TRUE(e.spawn(touch(&done))); // and the loop still takes work afterwards
     e.stop();

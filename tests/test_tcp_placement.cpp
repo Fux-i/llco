@@ -39,7 +39,7 @@ auto wait_until(Predicate done) -> bool {
     return done();
 }
 
-// Records the engine it was born on, then echoes one message back.
+// Records the engine it first ran on, then echoes one message back.
 task<> echo_counted(scheduler *s, int fd, std::vector<std::atomic<unsigned>> *landed) {
     for (unsigned i = 0; i < s->size(); ++i)
         if (&s->engine_at(i) == current_engine())

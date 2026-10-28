@@ -40,11 +40,11 @@ constexpr std::size_t QUICK_ADDS      = 512;
 constexpr std::size_t QUICK_WAKEUPS   = 20;
 constexpr std::size_t QUICK_SPAWNS    = 5'000;
 constexpr std::size_t QUICK_WAITS     = 200;
-constexpr std::size_t QUICK_HOPS      = 100;
+constexpr std::size_t QUICK_RESUMES   = 100;
 constexpr std::size_t FULL_WAKEUPS    = 200;
 constexpr std::size_t FULL_SPAWNS     = 100'000;
 constexpr std::size_t FULL_WAITS      = 2'000;
-constexpr std::size_t FULL_HOPS       = 1'000;
+constexpr std::size_t FULL_RESUMES    = 1'000;
 constexpr double      MEDIAN          = 0.5;
 constexpr double      P10             = 0.1;
 constexpr double      P90             = 0.9;
@@ -56,7 +56,7 @@ struct scale {
     std::size_t wakeups;
     std::size_t spawns;
     std::size_t waits;
-    std::size_t hops;
+    std::size_t resumes;
 };
 
 auto parse_scale(std::span<char *const> args) -> scale {
@@ -67,13 +67,13 @@ auto parse_scale(std::span<char *const> args) -> scale {
                      .wakeups = QUICK_WAKEUPS,
                      .spawns  = QUICK_SPAWNS,
                      .waits   = QUICK_WAITS,
-                     .hops    = QUICK_HOPS};
+                     .resumes = QUICK_RESUMES};
     return scale{.rounds  = ROUNDS,
                  .adds    = QUEUE_CAPACITY - 1,
                  .wakeups = FULL_WAKEUPS,
                  .spawns  = FULL_SPAWNS,
                  .waits   = FULL_WAITS,
-                 .hops    = FULL_HOPS};
+                 .resumes = FULL_RESUMES};
 }
 
 auto cpu_model() -> std::string {
@@ -124,8 +124,8 @@ task<> counter_probe(std::atomic<std::size_t> *done) {
     co_return;
 }
 
-// One sample per hop: queue it onto the target, then measure the trip back to a resume.
-task<> hop_probe(engine *target, std::span<std::uint64_t> ticks, std::atomic<bool> *done) {
+// One sample per resume_on: requeue onto the target, then measure the trip back to a resume.
+task<> resume_on_probe(engine *target, std::span<std::uint64_t> ticks, std::atomic<bool> *done) {
     for (auto &slot : ticks) {
         const auto begin = bench::tsc();
         co_await resume_on(*target);
@@ -161,7 +161,7 @@ auto measure_add(const scale &plan) -> std::vector<double> {
     return rounds;
 }
 
-// Submit to a sleeping engine; the body stamps itself so the delta covers doorbell and resume.
+// Submit to a blocked engine; the body stamps itself so the delta covers wakeup and resume.
 auto measure_wakeup(const scale &plan) -> std::vector<double> {
     engine e;
     e.start();
@@ -172,7 +172,7 @@ auto measure_wakeup(const scale &plan) -> std::vector<double> {
     for (unsigned round = 0; round < plan.rounds; ++round) {
         double total = 0.0;
         for (std::size_t i = 0; i < plan.wakeups; ++i) {
-            // Every sample must start from a sleeping loop, otherwise it measures the awake path.
+            // Every sample must start from a blocked loop, otherwise it measures the running path.
             std::this_thread::sleep_for(std::chrono::milliseconds{SETTLE_MS});
             std::atomic<double> stamp{0.0};
             const auto          begin = bench::steady_ns();
@@ -226,10 +226,10 @@ auto measure_sync_wait(const scale &plan) -> std::vector<double> {
     return rounds;
 }
 
-// A coroutine hopping back onto its own engine: one queue round trip and one resume per sample.
-auto measure_hop(const scale &plan) -> std::vector<double> {
+// A coroutine resuming back onto its own engine: one queue round trip and one resume per sample.
+auto measure_resume_on(const scale &plan) -> std::vector<double> {
     engine                    e;
-    std::vector<std::uint64_t> ticks(plan.hops);
+    std::vector<std::uint64_t> ticks(plan.resumes);
     std::atomic<bool>          done{false};
     std::vector<double>        rounds;
     rounds.reserve(plan.rounds);
@@ -237,13 +237,13 @@ auto measure_hop(const scale &plan) -> std::vector<double> {
 
     for (unsigned round = 0; round < plan.rounds; ++round) {
         done.store(false, std::memory_order_relaxed);
-        (void)e.spawn(hop_probe(&e, ticks, &done));
+        (void)e.spawn(resume_on_probe(&e, ticks, &done));
         while (!done.load(std::memory_order_acquire)) {
         }
         std::uint64_t total = 0;
         for (auto tick : ticks)
             total += tick;
-        rounds.push_back(bench::to_ns(total) / static_cast<double>(plan.hops));
+        rounds.push_back(bench::to_ns(total) / static_cast<double>(plan.resumes));
     }
     e.stop();
     return rounds;
@@ -275,7 +275,7 @@ auto main(int argc, char **argv) -> int {
     const auto wait = measure_sync_wait(plan);
     report("sync_wait_round_trip", wait, static_cast<std::size_t>(plan.rounds) * plan.waits);
 
-    const auto hop = measure_hop(plan);
-    report("hop_cost", hop, static_cast<std::size_t>(plan.rounds) * plan.hops);
+    const auto resume_on = measure_resume_on(plan);
+    report("resume_on_cost", resume_on, static_cast<std::size_t>(plan.rounds) * plan.resumes);
     return 0;
 }

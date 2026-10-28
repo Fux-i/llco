@@ -64,7 +64,7 @@ inline void engine::stop() {
         m_thread.request_stop();
         m_thread.join(); // the loop runs its own ops out before it returns
         // Tasks pushed after the loop's last look still have to run; their ops are submitted by
-        // this thread, which stays alive until they come home.
+        // this thread, which stays alive until they complete.
         for (;;) {
             (void)drain();
             ring().submit();
@@ -107,13 +107,13 @@ inline void engine::notify() noexcept {
     const int fd = m_event_fd.load(std::memory_order_relaxed);
     if (fd < 0)
         return;
-    // A running loop will see the work itself; only a sleeping one needs the ring.
-    if (!m_sleeping.exchange(false))
+    // A running loop will see the work itself; only a blocked one needs the ring.
+    if (!m_idle.exchange(false))
         return;
     m_wakeups.fetch_add(1, std::memory_order_relaxed);
     const std::uint64_t one = 1;
     [[maybe_unused]]
-    auto written = ::write(fd, &one, sizeof one); // failing means it is awake
+    auto written = ::write(fd, &one, sizeof one); // failing means it is already running
 }
 
 inline void engine::wait() noexcept {
@@ -139,14 +139,14 @@ inline void engine::loop(const std::stop_token &token) {
         // thread, and it gets them cancelled the moment it exits.
         if (token.stop_requested() && m_queue.empty() && ring().running_io() == 0)
             return;
-        // Announce the sleep first, then look: a push that landed before this look is still
-        // in the queue, and one that lands after it rings the bell. Reversing these two is a
+        // Mark the loop idle first, then look: a push that landed before this look is still
+        // in the queue, and one that lands after it wakes the loop. Reversing these two is a
         // lost wakeup. The stop token needs the same look, because its callback went through
-        // the sleeping check too and may have decided not to ring.
-        m_sleeping = true;
+        // the idle check too and may have decided not to wake it.
+        m_idle = true;
         if (m_queue.empty() && ring().pending() == 0 && ring().sq_pending() == 0)
             wait();
-        m_sleeping = false;
+        m_idle = false;
     }
 }
 

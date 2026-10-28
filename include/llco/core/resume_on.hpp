@@ -7,7 +7,7 @@
 
 namespace llco {
 
-// Hops the current coroutine onto another executor instead of continuing inline.
+// Resumes the current coroutine on another executor instead of continuing inline.
 template <class E>
 class [[LLCO_AWAIT_HINT]] resume_on_awaiter {
   private:

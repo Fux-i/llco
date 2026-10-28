@@ -24,9 +24,9 @@ _Avoid_: listener, accept thread
 scheduler 决定"这个任务放进哪个 engine"的规则。当前只有一种实现——轮转（round robin）——直接写在 `scheduler` 里，没有可替换的接口（ADR-0005）。
 _Avoid_: strategy, load balancing algorithm
 
-**hop**:
-把一个挂起协程的后续执行交给另一个 engine 的动作。
-_Avoid_: migration, switch, transfer
+**cross-engine resume（跨 engine 恢复）**:
+把一个挂起协程的后续执行交给另一个 engine 的动作，入口是 `co_await resume_on(e)`。
+_Avoid_: hop, migration, switch, transfer
 
 ## 协程与任务
 
@@ -68,13 +68,13 @@ _Avoid_: block_on, wait_for
 engine 线程唯一允许阻塞的调用位置：`read(eventfd)`。
 _Avoid_: idle wait, sleep point
 
-**doorbell**:
-生产者用来叫醒已经睡着的 engine 线程的信号。
-_Avoid_: wakeup, signal, interrupt
+**wakeup**:
+生产者写 eventfd，让阻塞在 `read(eventfd)` 上的 engine 循环继续运行；IO 完成通知也写同一个 fd，两者共用一个阻塞点。
+_Avoid_: doorbell, signal, interrupt
 
-**full policy**:
+**queue-full policy**:
 队列满时 engine 采取的行为。
-_Avoid_: overload policy, backpressure mode
+_Avoid_: full policy, overload policy, backpressure mode
 
 **backpressure**:
 下游处理不过来时向上游传回的"满了"信号。
@@ -91,7 +91,7 @@ _Avoid_: condition variable, flag
 _Avoid_: counter, barrier
 
 **when_all / when_any**:
-用 latch / event 写的组合配方，不是组件；when_any 的 event 必须共享（掉队任务还会引用它）。
+用 latch / event 写的组合写法，不是组件；when_any 的 event 必须共享（未完成的任务还会引用它）。
 _Avoid_: join, race
 
 ## 可观测性与 IO
@@ -100,17 +100,13 @@ _Avoid_: join, race
 记录任务在各线程上起止时刻的事件流。
 _Avoid_: log, profile, telemetry
 
-**lane**:
+**lane（线程轨道）**:
 trace 中一条线程对应的一行时间轴。
-_Avoid_: track, row
+_Avoid_: 泳道, swimlane, row
 
 **io adapter**:
 把"提交 IO 请求、取回完成事件"抽象出来的接口，engine 只认识它。
 _Avoid_: backend, driver, io engine
-
-**reactor**:
-engine 的 blocking point 在 IO 形态下的叫法：等待门铃与 IO 完成事件汇合的地方。
-_Avoid_: event loop, poller
 
 ## 工程
 

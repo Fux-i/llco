@@ -1,13 +1,13 @@
 # 队列满时对外返回失败，resume_on 回退为内联继续
 
-队列有界。外部提交路径（`engine.add` / `scheduler.submit`）在 `try_push` 返回 false 时把失败交回调用者：engine 自己既不重试也不终止进程，换一个 engine 重试是 scheduler 的职责。协程内部的注入路径（`resume_on`）无法返回失败——协程已经挂起——因此约定：`try_push` 失败就由当前线程直接继续执行它（对称传递返回自己的句柄）。永不阻塞、永不丢失，也不引入无界兜底队列。
+队列有界。外部提交路径（`engine.add` / `scheduler.submit`）在 `try_push` 返回 false 时把失败交回调用者：engine 自己既不重试也不终止进程，换一个 engine 重试是 scheduler 的职责。协程内部的注入路径（`resume_on`）无法返回失败——协程已经挂起——因此约定：`try_push` 失败就由当前线程直接继续执行它（对称传递返回自己的句柄）。永不阻塞、永不丢失，也不引入无界后备队列。
 
 ## Considered Options
 
 - engine 满载即 `terminate`（只有一个 engine 时尤其如此）：把容量问题升级成进程死亡，而且让单线程调试时唯一的失败路径直接杀进程。
 - `resume_on` 路径用阻塞 push：atomic_queue 的阻塞 `push` 是纯自旋，没有超时、没有取消、没有 closed 状态，在关停路径上不可取消，且可能死锁（目标 engine 的消费者正在等源 engine）。
 - `resume_on` 路径失败后丢进无界 fallback 队列：有界就名存实亡。
-- 引入 `full_policy = reject | block | terminate` 配置位：在真的需要 block 之前不做这层抽象。
+- 引入 `queue_full_policy = reject | block | terminate` 配置位：在真的需要 block 之前不做这层抽象。
 
 ## Consequences
 

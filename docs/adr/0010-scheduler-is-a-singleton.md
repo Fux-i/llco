@@ -24,7 +24,7 @@ llco::run(std::move(batch));                          // 容器里的任务，�
 
 - 两个入口都接受任意 `task<T>` 并**丢弃返回值**：没有结果通道，也没有异常通道——任务抛异常走 engine 的 handler（默认终止），和 detached 任务一致。
 - `sync_run` 的等待单位是"这批任务全部结束"，不看子任务；提交被拒时同样抛 `std::runtime_error`。
-- 容器重载只收右值 range（`run(std::move(batch))`），`sync_run` 另要求 `sized_range`（提交前要定批次计数）；元素类型必须是 `task<T>`，用 `Task` concept 判定。
+- 容器重载只收右值 range（`run(std::move(batch))`），`sync_run` 另要求 `sized_range`（提交前要定批次计数）；元素类型必须是 `task<T>`，用 `TaskBatch` / `SizedTaskBatch` concept 约束。
 - callable 重载用 `TaskMaker` concept（`concepts/task_maker.hpp`）约束：可调用且返回 `Task`，否则在重载决议阶段就报错，而不是掉进函数体。
 - 协程 lambda **必须写返回类型**：`co_return` 不能出现在返回类型推导的函数里（clang 22 实测 `error: 'co_return' cannot be used in a function with a deduced return type`）。没有宏包装，这是语言的约束。
 - 闭包由 `detail::invoked` 搬进协程帧再调用：lambda 协程把闭包当 `this`，若在调用点就地析构，帧里访问捕获就是悬空（ASan 实测 `stack-use-after-scope`）。

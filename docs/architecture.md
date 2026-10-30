@@ -156,7 +156,7 @@ const int winner = co_await first->wait();
 include/llco/
   llco.hpp                                # 聚合头文件：只列用户会直接写到的类型
   attr.hpp  config.hpp                    # 跨切面：每一层都 include，留在顶层
-  concepts/ executor.hpp  task_maker.hpp  # 只放 concept
+  concepts/ executor.hpp  task_maker.hpp  task_batch.hpp  # 只放 concept
   core/     task.hpp  resume_on.hpp       # 模板，单文件
   runtime/  queue.*  engine.*  scheduler.*  run.*
   sync/     event.hpp  latch.hpp  sync_wait.hpp   # 基元 + 阻塞点；组合写法写在文档里

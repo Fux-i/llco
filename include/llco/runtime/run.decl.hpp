@@ -3,6 +3,7 @@
 #include <ranges>
 #include <type_traits>
 
+#include <llco/concepts/task_batch.hpp>
 #include <llco/concepts/task_maker.hpp>
 #include <llco/core/task.hpp>
 
@@ -16,10 +17,8 @@ void run(task<T> &&...tasks);
 template <TaskMaker F>
 void run(F &&make);
 
-// Submits every task in the range and returns; the range is consumed, so only an rvalue fits.
-template <class R>
-    requires std::ranges::range<R> && Task<std::ranges::range_value_t<R>> &&
-             (!std::is_lvalue_reference_v<R>)
+// Submits every task in the batch and returns; the batch is consumed, so only an rvalue fits.
+template <TaskBatch R>
 void run(R &&tasks);
 
 // Submits every task and blocks until all of them have finished.
@@ -30,10 +29,8 @@ void sync_run(task<T> &&...tasks);
 template <TaskMaker F>
 void sync_run(F &&make);
 
-// Submits every task in the range, then blocks; the range is consumed, so only an rvalue fits.
-template <class R>
-    requires std::ranges::range<R> && std::ranges::sized_range<R> &&
-             Task<std::ranges::range_value_t<R>> && (!std::is_lvalue_reference_v<R>)
+// Submits every task in the batch, then blocks; the batch is consumed, so only an rvalue fits.
+template <SizedTaskBatch R>
 void sync_run(R &&tasks);
 
 } // namespace llco

@@ -38,6 +38,10 @@ _Avoid_: coroutine, job, future
 返回 `task` 的可调用物（协程 lambda、工厂函数）；`run` / `sync_run` 用它约束入参，`Task` 判定一个类型是不是 `task<T>`。
 _Avoid_: task factory, producer, callable
 
+**TaskBatch**:
+可被消费的 `task` 容器：右值 range，元素是 `task<T>`。`SizedTaskBatch` 另要求 `sized_range`，因为 `sync_run` 要在提交前知道批次大小。
+_Avoid_: task list, group, collection
+
 **父协程 (parent)**:
 一个协程结束时把控制权交回去的那个协程，也就是 `co_await` 它的那个协程；顶层任务没有父协程，控制权交回 `noop_coroutine`。
 _Avoid_: 续体, continuation, caller, 子协程

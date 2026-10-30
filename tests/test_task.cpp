@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
+#include <llco/concepts/task_batch.hpp>
 #include <llco/concepts/task_maker.hpp>
 #include <llco/core/task.hpp>
 #include <llco/runtime/run.decl.hpp>
 
+#include <forward_list>
 #include <utility>
 #include <vector>
 
@@ -33,15 +35,14 @@ static_assert(TaskMaker<decltype([] { return noop(); })>);
 static_assert(!TaskMaker<decltype(&one)>);
 static_assert(!TaskMaker<int>);
 
-// A range of tasks is consumed from an rvalue only.
-template <class R>
-concept AcceptsRvalueRange = requires(R &r) { run(std::move(r)); };
+// TaskBatch: an rvalue range whose elements are tasks.
+static_assert(TaskBatch<std::vector<task<>>>);
+static_assert(!TaskBatch<std::vector<task<>> &>);
+static_assert(!TaskBatch<std::vector<int>>);
 
-template <class R>
-concept AcceptsLvalueRange = requires(R &r) { run(r); };
-
-static_assert(AcceptsRvalueRange<std::vector<task<>>>);
-static_assert(!AcceptsLvalueRange<std::vector<task<>>>);
+// SizedTaskBatch: the batch knows its size, so sync_run can count it up front.
+static_assert(SizedTaskBatch<std::vector<task<>>>);
+static_assert(!SizedTaskBatch<std::forward_list<task<>>>);
 
 } // namespace
 

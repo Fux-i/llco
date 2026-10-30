@@ -62,9 +62,7 @@ void run(F &&make) {
     run(detail::invoked<std::decay_t<F>>(std::forward<F>(make)));
 }
 
-template <class R>
-    requires std::ranges::range<R> && Task<std::ranges::range_value_t<R>> &&
-             (!std::is_lvalue_reference_v<R>)
+template <TaskBatch R>
 void run(R &&tasks) {
     for (auto &t : std::forward<R>(tasks))
         if (!scheduler::submit(std::move(t)))
@@ -92,9 +90,7 @@ void sync_run(F &&make) {
     sync_run(detail::invoked<std::decay_t<F>>(std::forward<F>(make)));
 }
 
-template <class R>
-    requires std::ranges::range<R> && std::ranges::sized_range<R> &&
-             Task<std::ranges::range_value_t<R>> && (!std::is_lvalue_reference_v<R>)
+template <SizedTaskBatch R>
 void sync_run(R &&tasks) {
     detail::batch done{static_cast<unsigned>(std::ranges::size(tasks))};
     bool          all = true;

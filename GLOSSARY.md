@@ -34,6 +34,10 @@ _Avoid_: hop, migration, switch, transfer
 惰性协程类型的实例，代表一件尚未开始、可被 resume 的工作。
 _Avoid_: coroutine, job, future
 
+**TaskMaker**:
+返回 `task` 的可调用物（协程 lambda、工厂函数）；`run` / `sync_run` 用它约束入参，`Task` 判定一个类型是不是 `task<T>`。
+_Avoid_: task factory, producer, callable
+
 **父协程 (parent)**:
 一个协程结束时把控制权交回去的那个协程，也就是 `co_await` 它的那个协程；顶层任务没有父协程，控制权交回 `noop_coroutine`。
 _Avoid_: 续体, continuation, caller, 子协程

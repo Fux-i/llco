@@ -1,9 +1,9 @@
 #pragma once
 
-#include <llco/attr.hpp>
 #include <coroutine>
 #include <exception>
 #include <functional>
+#include <llco/attr.hpp>
 #include <optional>
 #include <semaphore>
 #include <stdexcept>
@@ -142,7 +142,18 @@ class task {
         if (m_handle != nullptr)
             m_handle.destroy();
     }
-    CLASS_NO_COPY_MOVE(task);
+    task(const task &)            = delete;
+    task &operator=(const task &) = delete;
+    // a moved-from task is empty; the frame stays with the new owner
+    task(task &&other) noexcept : m_handle{std::exchange(other.m_handle, nullptr)} {}
+    auto operator=(task &&other) noexcept -> task & {
+        if (this == &other)
+            return *this;
+        if (m_handle != nullptr)
+            m_handle.destroy();
+        m_handle = std::exchange(other.m_handle, nullptr);
+        return *this;
+    }
 
     auto operator co_await() -> awaiter {
         return awaiter{m_handle};

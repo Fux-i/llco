@@ -19,10 +19,13 @@ ADR-0002 当初拒绝单例的理由是"测试需要同时存在两个互不干�
 llco::run(server());                                  // submit 后立即返回
 llco::run([]() -> task<> { /* ... */ });              // 就地写协程
 llco::sync_run(task_a(), task_b());                   // 提交并阻塞到全部完成
+llco::run(std::move(batch));                          // 容器里的任务，右值 range
 ```
 
 - 两个入口都接受任意 `task<T>` 并**丢弃返回值**：没有结果通道，也没有异常通道——任务抛异常走 engine 的 handler（默认终止），和 detached 任务一致。
 - `sync_run` 的等待单位是"这批任务全部结束"，不看子任务；提交被拒时同样抛 `std::runtime_error`。
+- 容器重载只收右值 range（`run(std::move(batch))`），`sync_run` 另要求 `sized_range`（提交前要定批次计数）；元素类型必须是 `task<T>`，用 `Task` concept 判定。
+- callable 重载用 `TaskMaker` concept（`concepts/task_maker.hpp`）约束：可调用且返回 `Task`，否则在重载决议阶段就报错，而不是掉进函数体。
 - 协程 lambda **必须写返回类型**：`co_return` 不能出现在返回类型推导的函数里（clang 22 实测 `error: 'co_return' cannot be used in a function with a deduced return type`）。没有宏包装，这是语言的约束。
 - 闭包由 `detail::invoked` 搬进协程帧再调用：lambda 协程把闭包当 `this`，若在调用点就地析构，帧里访问捕获就是悬空（ASan 实测 `stack-use-after-scope`）。
 
@@ -40,4 +43,4 @@ llco::sync_run(task_a(), task_b());                   // 提交并阻塞到全�
 - `sync_run` 阻塞调用线程，只能从非 engine 线程调用（与 `sync_wait` 同一条约束）；从任务里调用会占住一条 engine 线程等待别的 engine。
 - 测试的固定写法：每个用例第一行 `scheduler::init(N)`；`stop()` 之后 `engine_at(i)` 仍然有效，但任何 `submit` 都会被拒绝。
 - `engine` 不再是"给用户手动用的对象"之外的东西：它仍然可构造（manual engine），单例只包 scheduler。
-- `llco.hpp` 多了 `runtime/run.hpp`；`scheduler` 的成员 `run` 删除，由 `llco::run` 取代。
+- `llco.hpp` 多了 `runtime/run.decl.hpp`；`scheduler` 的成员 `run` 删除，由 `llco::run` 取代。

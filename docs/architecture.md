@@ -156,9 +156,9 @@ const int winner = co_await first->wait();
 include/llco/
   llco.hpp                                # 聚合头文件：只列用户会直接写到的类型
   attr.hpp  config.hpp                    # 跨切面：每一层都 include，留在顶层
-  concepts/ executor.hpp                  # 只放 concept
+  concepts/ executor.hpp  task_maker.hpp  # 只放 concept
   core/     task.hpp  resume_on.hpp       # 模板，单文件
-  runtime/  queue.*  engine.*  scheduler.*  run.hpp   # run/sync_run 是自由函数入口
+  runtime/  queue.*  engine.*  scheduler.*  run.*
   sync/     event.hpp  latch.hpp  sync_wait.hpp   # 基元 + 阻塞点；组合写法写在文档里
   trace/    trace.*
   io/       io_uring.*                    # ring + 五个 awaiter 同文件（互相依赖）
@@ -167,7 +167,7 @@ include/llco/
 
 五条规则：
 
-1. **拆分阈值**：非模板的具体类/自由函数，合并后超过 **50 行**或超过 **3 个方法**才拆成 `*.decl.hpp` + `*.impl.hpp`（方法数 = 公开成员函数 + 具名自由函数，awaiter 的 `await_*` 各算一个）。**模板（`task`、`resume_on`）与 `concepts/`、`attr`/`config` 永远单文件**——模板的实现必须留在头里，拆开只会在实例化时才暴露问题。已拆的模块不会因为以后变小而自动合并：阈值只在新增模块或大改时判一次。
+1. **拆分阈值**：非模板的具体类/自由函数，合并后超过 **50 行**或超过 **3 个方法**才拆成 `*.decl.hpp` + `*.impl.hpp`（方法数 = 公开成员函数 + 具名自由函数，awaiter 的 `await_*` 各算一个）。**模板也可以拆**（`run.*` 就是这么拆的）：`decl.hpp` 末尾收口 `impl.hpp`，两个文件都是头文件、实例化时全部可见，所以"拆开只会在实例化时才暴露问题"对 header-only 不成立。永远单文件的只有 `concepts/`、`attr`/`config`。已拆的模块不会因为以后变小而自动合并：阈值只在新增模块或大改时判一次。
 2. **入口只有一个**：拆开的模块由 `*.decl.hpp` 末尾 `#include <llco/.../同模块.impl.hpp>` 收口；`*.impl.hpp` 顶部反过来 include `.decl.hpp`（`#pragma once` 兜住循环）。用户永远只 include `.decl.hpp`，不存在"忘了 include impl 导致链接错误"。
 3. **非模板函数必须 `inline`**：写在类外的成员函数/自由函数都要 `inline`（类内定义不用）。engine、scheduler、trace 都是具体类（engine 不按队列参数化，只认 `queue_type`），所以 `*.impl.hpp` 里每个定义都要自己加 `inline`。
 4. **include 一律全路径**：内部头也写 `#include <llco/core/task.hpp>`，不用同目录相对写法。子目录里的相对写法会先在同一目录里找，M6/M7 就是这样撞上"找不到 attr.hpp"的。

@@ -534,7 +534,7 @@ $ ./build/bin/echo_server
 - `io::recv` / `io::send` 加了 `std::span<char>` 与 `std::string_view` 重载，调用点不再写 `std::as_writable_bytes(...)`。
 - `net::connection` / `net::listener`：把 `ring` 和 fd 收进对象，`co_await conn.recv(buffer)` / `co_await listener.accept()`（结果直接是 `connection`）；fd 由析构关闭，`listener.cancel()` 负责打断 pending accept。`echo_server` 从 105 行降到 96 行，回显循环里不再出现 `ring()`。
 - 不动的：`io::` 层的显式 `ring&` 契约、ADR-0006 的分发路径、`stop()` 语义、`llco.hpp` 聚合头文件（io/net 仍不进聚合头文件）。
-- 四套构建现在：default 75、asan 75、trace 77、gcc 75（M12 完成时是 66/66/68/66；这轮加了 3 条用例，ADR-0010 又加了 4 条）。
+- 四套构建现在：default 80、asan 80、trace 82、gcc 80（M12 完成时是 66/66/68/66；这轮加了 3 条用例，ADR-0010 加了 4 条，ADR-0011 又加了 5 条）。
 
 ---
 

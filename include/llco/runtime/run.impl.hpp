@@ -1,10 +1,9 @@
 #pragma once
 
-#include <llco/core/task.hpp>
+#include <llco/runtime/run.decl.hpp>
 #include <llco/runtime/scheduler.decl.hpp>
 
 #include <atomic>
-#include <concepts>
 #include <semaphore>
 #include <stdexcept>
 #include <utility>
@@ -20,7 +19,10 @@ class batch {
     std::binary_semaphore m_done{0};
 
   public:
-    explicit batch(unsigned count) noexcept : m_pending{count} {}
+    explicit batch(unsigned count) noexcept : m_pending{count} {
+        if (count == 0)
+            m_done.release();
+    }
 
     void count_down() noexcept {
         if (m_pending.fetch_sub(1, std::memory_order_acq_rel) == 1)
@@ -49,44 +51,62 @@ task<> invoked(F make) {
 
 } // namespace detail
 
-// Submits every task and returns; throws std::runtime_error on the first rejection (ADR-0004).
 template <class... T>
 void run(task<T> &&...tasks) {
     if (!(scheduler::submit(std::move(tasks)) && ...))
         throw std::runtime_error{"scheduler is full"};
 }
 
-// Runs what the callable returns, e.g. llco::run([]() -> task<> { co_return; });
-template <class F>
-    requires std::invocable<F &>
+template <TaskMaker F>
 void run(F &&make) {
     run(detail::invoked<std::decay_t<F>>(std::forward<F>(make)));
 }
 
-// Submits every task and blocks until all of them have finished.
-template <class... T>
-void sync_run(task<T> &&...tasks) {
-    if constexpr (sizeof...(T) > 0) {
-        detail::batch done{static_cast<unsigned>(sizeof...(T))};
-        bool          all        = true;
-        auto          submit_one = [&done, &all](auto &t) {
-            if (scheduler::submit(detail::counted(&t, &done)))
-                return;
-            all = false;
-            done.count_down();
-        };
-        (submit_one(tasks), ...);
-        done.wait();
-        if (!all)
+template <class R>
+    requires std::ranges::range<R> && Task<std::ranges::range_value_t<R>> &&
+             (!std::is_lvalue_reference_v<R>)
+void run(R &&tasks) {
+    for (auto &t : std::forward<R>(tasks))
+        if (!scheduler::submit(std::move(t)))
             throw std::runtime_error{"scheduler is full"};
-    }
 }
 
-// Runs what the callable returns, then blocks, e.g. llco::sync_run([]() -> task<> { co_return; });
-template <class F>
-    requires std::invocable<F &>
+template <class... T>
+void sync_run(task<T> &&...tasks) {
+    detail::batch done{static_cast<unsigned>(sizeof...(T))};
+    bool          all        = true;
+    auto          submit_one = [&done, &all](auto &t) {
+        if (scheduler::submit(detail::counted(&t, &done)))
+            return;
+        all = false;
+        done.count_down();
+    };
+    (submit_one(tasks), ...);
+    done.wait();
+    if (!all)
+        throw std::runtime_error{"scheduler is full"};
+}
+
+template <TaskMaker F>
 void sync_run(F &&make) {
     sync_run(detail::invoked<std::decay_t<F>>(std::forward<F>(make)));
+}
+
+template <class R>
+    requires std::ranges::range<R> && std::ranges::sized_range<R> &&
+             Task<std::ranges::range_value_t<R>> && (!std::is_lvalue_reference_v<R>)
+void sync_run(R &&tasks) {
+    detail::batch done{static_cast<unsigned>(std::ranges::size(tasks))};
+    bool          all = true;
+    for (auto &t : std::forward<R>(tasks)) {
+        if (scheduler::submit(detail::counted(&t, &done)))
+            continue;
+        all = false;
+        done.count_down();
+    }
+    done.wait();
+    if (!all)
+        throw std::runtime_error{"scheduler is full"};
 }
 
 } // namespace llco

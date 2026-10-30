@@ -1,6 +1,8 @@
 #include <llco/llco.hpp>
 #include <print>
 #include <thread>
+#include <utility>
+#include <vector>
 
 using namespace llco;
 
@@ -22,8 +24,15 @@ int main() {
 
     // A coroutine lambda has to spell out its return type: co_return cannot
     // appear in a function with a deduced return type.
-    sync_run([]() -> task<> {
+    sync_run([] -> task<> {
         std::println("[lambda] thread {}", std::this_thread::get_id());
         co_return;
     });
+
+    // A container of tasks is accepted as an rvalue only: the range is consumed.
+    std::vector<task<>> batch;
+    batch.reserve(2);
+    for (int id = 4; id < 6; ++id) // NOLINT(cppcoreguidelines-avoid-magic-numbers): demo labels
+        batch.push_back(report(id));
+    sync_run(std::move(batch));
 }

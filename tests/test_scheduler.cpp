@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 #include <llco/config.hpp>
 #include <llco/core/task.hpp>
-#include <llco/runtime/run.hpp>
+#include <llco/runtime/run.decl.hpp>
 #include <llco/runtime/scheduler.decl.hpp>
 
 #include <atomic>
@@ -192,12 +192,48 @@ TEST(scheduler, run_accepts_a_callable) {
     std::atomic<int> done{0};
     scheduler::init(1);
 
-    // NOLINTNEXTLINE(cppcoreguidelines-avoid-capturing-lambda-coroutines): run() stores the closure in a frame
-    llco::run([&done]() -> task<> {
+    // run() stores the closure in a frame, so the capture stays alive
+    llco::run([&done]() -> task<> { // NOLINT(cppcoreguidelines-avoid-capturing-lambda-coroutines)
         ++done;
         co_return;
     });
     scheduler::stop();
 
     EXPECT_EQ(done.load(), 1) << "run() never invoked the callable";
+}
+TEST(scheduler, run_accepts_a_range) {
+    std::atomic<int> done{0};
+    scheduler::init(2);
+
+    std::vector<task<>> batch;
+    batch.reserve(3);
+    for (int i = 0; i < 3; ++i)
+        batch.push_back(touch(&done));
+    run(std::move(batch));
+    scheduler::stop();
+
+    EXPECT_EQ(done.load(), 3) << "run() never submitted the range";
+}
+
+TEST(scheduler, sync_run_waits_for_a_range) {
+    std::atomic<int> done{0};
+    scheduler::init(2);
+
+    std::vector<task<>> batch;
+    batch.reserve(3);
+    for (int i = 0; i < 3; ++i)
+        batch.push_back(touch(&done));
+    sync_run(std::move(batch));
+
+    EXPECT_EQ(done.load(), 3) << "sync_run returned before the range finished";
+    scheduler::stop();
+}
+
+TEST(scheduler, sync_run_of_an_empty_range_returns) {
+    scheduler::init(1);
+
+    std::vector<task<>> batch;
+    sync_run(std::move(batch)); // an empty batch must not block
+
+    scheduler::stop();
 }

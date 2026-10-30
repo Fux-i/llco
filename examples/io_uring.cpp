@@ -1,5 +1,6 @@
 #include <chrono>
 #include <cstdint>
+#include <llco/io/op.decl.hpp>
 #include <llco/llco.hpp>
 #include <print>
 #include <thread>

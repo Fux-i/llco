@@ -161,14 +161,14 @@ include/llco/
   runtime/  queue.*  engine.*  scheduler.*  run.*
   sync/     event.hpp  latch.hpp  sync_wait.hpp   # 基元 + 阻塞点；组合写法写在文档里
   trace/    trace.*
-  io/       io_uring.*                    # ring + 五个 awaiter 同文件（互相依赖）
+  io/       ring.*  op.*                  # ring 分发完成；op 是可等待操作，依赖 ring
   net/      socket.*                      # socket 就绪帮手，不碰 io_uring
 ```
 
 五条规则：
 
 1. **拆分阈值**：非模板的具体类/自由函数，合并后超过 **50 行**或超过 **3 个方法**才拆成 `*.decl.hpp` + `*.impl.hpp`（方法数 = 公开成员函数 + 具名自由函数，awaiter 的 `await_*` 各算一个）。**模板也可以拆**（`run.*` 就是这么拆的）：`decl.hpp` 末尾收口 `impl.hpp`，两个文件都是头文件、实例化时全部可见，所以"拆开只会在实例化时才暴露问题"对 header-only 不成立。永远单文件的只有 `concepts/`、`attr`/`config`。已拆的模块不会因为以后变小而自动合并：阈值只在新增模块或大改时判一次。
-2. **入口只有一个**：拆开的模块由 `*.decl.hpp` 末尾 `#include <llco/.../同模块.impl.hpp>` 收口；`*.impl.hpp` 顶部反过来 include `.decl.hpp`（`#pragma once` 兜住循环）。用户永远只 include `.decl.hpp`，不存在"忘了 include impl 导致链接错误"。
+2. **入口只有一个**：拆开的模块由 `*.decl.hpp` 末尾 `#include <llco/.../同模块.impl.hpp>` 收口；`*.impl.hpp` 顶部反过来 include `.decl.hpp`（`#pragma once` 兜住循环）。用户永远只 include `.decl.hpp`，不存在"忘了 include impl 导致链接错误"。同一模块拆成两个头时只许单向：`io/ring.*` 不得 include `io/op.*`。
 3. **非模板函数必须 `inline`**：写在类外的成员函数/自由函数都要 `inline`（类内定义不用）。engine、scheduler、trace 都是具体类（engine 不按队列参数化，只认 `queue_type`），所以 `*.impl.hpp` 里每个定义都要自己加 `inline`。
 4. **include 一律全路径**：内部头也写 `#include <llco/core/task.hpp>`，不用同目录相对写法。子目录里的相对写法会先在同一目录里找，M6/M7 就是这样撞上"找不到 attr.hpp"的。
 5. **聚合头文件只列用户会直接写到的类型**：`task`、`resume_on`、`engine`、`scheduler`、`run`/`sync_run`、`sync_wait`。`attr`/`config`/`queue`/`concepts` 是内部依赖，trace/io 是可选重型模块，都不进聚合头文件；tests 保持精确 include，用来验证每个头文件自包含。
@@ -179,7 +179,7 @@ include/llco/
 |---|---|---|
 | queue | 别名 + 薄适配器 | 改 `runtime/queue.decl.hpp` 里的 `queue_backend`（容量常量在 `config.hpp`）；队列装什么元素由使用方自己写，engine 的成员类型在 `runtime/engine.decl.hpp` |
 | 放置规则 | 硬编码在 scheduler 里（一个原子游标，ADR-0005） | 出现第二种放置需求时再抽接口 |
-| IO | 只有一个实现（io_uring），具体类 + awaiter | 出现第二个后端时再抽接口；awaiter 与 ring 互相依赖，故同文件 |
+| IO | 只有一个实现（io_uring），具体类 + awaiter | 出现第二个后端时再抽接口；`io/ring.*` 管环与完成分发，`io/op.*` 是可等待操作，只许 op 依赖 ring |
 | 网络 | `send`/`recv` + `accept`/`connect` + `cancel`，IPv4 only | 要 IPv6 / 超时 / TLS 时再扩，不抽后端接口 |
 | trace | 编译期开关 | `LLCO_TRACE=ON`（默认关，零开销） |
 

@@ -1,7 +1,8 @@
 #include <gtest/gtest.h>
 #include <llco/core/resume_on.hpp>
 #include <llco/core/task.hpp>
-#include <llco/io/io_uring.decl.hpp>
+#include <llco/io/op.decl.hpp>
+#include <llco/io/ring.decl.hpp>
 #include <llco/net/socket.decl.hpp>
 #include <llco/runtime/scheduler.decl.hpp>
 #include <llco/sync/sync_wait.hpp>

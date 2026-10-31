@@ -28,4 +28,4 @@ scripts/trace.sh fanout   # 产物在 build/_trace/traces/fanout/trace.json
 
 把 `trace.json` 拖进 <https://ui.perfetto.dev> 就能看到每条线程的时间轴（文件已在 `.gitignore` 里）。
 
-> 注意 `echo_server` 是交互式示例，可以启动后通过 `nc 127.0.0.1 7000` 连接并测试。需要手动 `Ctrl` + `C` 退出！
+> 注意 `echo_server` 是交互式示例，可以启动后通过 `nc 127.0.0.1 7000` 连接并测试。需要手动 `Ctrl` + `C` 退出！`scripts/trace.sh echo_server` 同样会等你连完、`Ctrl` + `C` 收尾后才校验并生成 `trace.json`。

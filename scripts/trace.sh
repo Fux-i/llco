@@ -13,15 +13,15 @@ cd "$root"
 cmake --preset trace > /dev/null
 cmake --build --preset trace --target "$demo" > /dev/null
 mkdir -p "$out"
+rm -f "$out/trace.json" # only this run's file may pass the check below
 
 if [[ "$demo" == echo_server ]]; then
-    # It runs until Ctrl-C, so poke it once and then ask it to shut down cleanly.
-    ( cd "$out" && exec "$build/bin/$demo" ) &
-    server=$!
-    sleep 1
-    printf 'hello\n' | nc -N 127.0.0.1 7000 > /dev/null
-    kill -INT "$server"
-    wait "$server"
+    # Interactive: the server stays up until Ctrl-C, so the trace covers the real session.
+    # Ctrl-C reaches the whole process group; the script ignores it, the server shuts down.
+    trap ':' INT TERM
+    echo 'connect : printf "hello\n" | nc -N 127.0.0.1 7000'
+    echo 'stop    : disconnect the client, then Ctrl-C'
+    ( cd "$out" && exec "$build/bin/$demo" ) || true
 else
     ( cd "$out" && exec "$build/bin/$demo" )
 fi
@@ -31,4 +31,4 @@ python3 -m json.tool "$out/trace.json" > /dev/null
 echo
 echo "trace : $out/trace.json"
 echo "open  : https://ui.perfetto.dev, drag the file in"
-echo "note  : the demo runs in microseconds, press W in Perfetto to zoom in"
+echo "note  : press W in Perfetto to zoom in"

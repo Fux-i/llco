@@ -5,19 +5,23 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
 namespace llco {
 
 // The process-wide scheduler: N engines and the round-robin placement policy (ADR-0010).
+// Nothing runs until init() or the first use of a never-initialized scheduler.
 class scheduler {
   private:
     std::vector<std::unique_ptr<engine>> m_engines;
     std::atomic<unsigned>                m_next{0};
     bool                                 m_running{false};
+    std::atomic<bool>                    m_started{false};
+    std::once_flag                       m_default_pool;
 
-    explicit scheduler(unsigned count);
+    scheduler() = default;
     ~scheduler();
     CLASS_NO_COPY_MOVE(scheduler);
 
@@ -25,6 +29,9 @@ class scheduler {
 
     void start(unsigned count);
     void halt();
+
+    // Builds the default pool for a scheduler nobody initialized, once even under a first-use race.
+    void ensure_started();
 
   public:
     // (Re)builds the pool, stopping whatever was already running; count 0 means a single engine.

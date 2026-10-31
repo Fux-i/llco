@@ -152,4 +152,20 @@ TEST(trace, scheduler_names_lanes) {
     EXPECT_NE(json.find(R"("name":"engine-0")"), std::string::npos) << "engines need lane names";
     EXPECT_NE(json.find(R"("name":"engine-1")"), std::string::npos);
 }
+
+TEST(trace, scheduler_init_leaves_only_n_lanes) {
+    ASSERT_TRUE(trace::flush(TRACE_PATH)) << "flush could not drain the earlier lanes";
+    EXPECT_EQ(std::remove(TRACE_PATH), 0);
+
+    trace::set_thread_name("main");
+    scheduler::init(2);
+    scheduler::stop();
+
+    ASSERT_TRUE(trace::flush(TRACE_PATH)) << "flush could not write the file";
+    const auto json = slurp(TRACE_PATH);
+    EXPECT_EQ(std::remove(TRACE_PATH), 0);
+
+    EXPECT_EQ(count_of(json, R"("ph":"M")"), 3U)
+        << "init(2) must leave one main lane plus two engine lanes, nothing else";
+}
 #endif

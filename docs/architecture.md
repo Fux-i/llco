@@ -54,7 +54,7 @@ concept Executor = requires(E& e, std::coroutine_handle<> h) {
 - **handle 是唯一的交换单位**：队列里只放 `std::coroutine_handle<>`（8 字节、可平凡拷贝）。awaiter 不放队列——它活在协程帧里，寿命与队列不一致。
 - **父协程**：一个协程结束后把控制权交回去的那个协程，也就是 `co_await` 它的那个协程。顶层任务没有父协程，控制权交回 `noop_coroutine`。
 - **`sync_wait` 是调用线程的阻塞点**：`promise_base` 存一个 `std::binary_semaphore *`，`final_awaiter::await_suspend` 里**先** `release()` 再处理 continuation / detached（否则帧可能先被销毁）；`sync_wait` 在调用线程上 `resume()` 启动 root，然后阻塞在 semaphore 上，所以任务中途 `resume_on` 到别的 engine 也能被正确唤醒。这与 engine 自己的 eventfd 阻塞点无关。
-- **scheduler 是进程内单例**（ADR-0010，推翻 ADR-0002）：`scheduler::init(n)` 建（或重建）N 个 engine，`stop()` 让每个 engine 排空已入队任务后退出，析构即 `stop()`。放置只有一个规则：`m_next.fetch_add(1) % n` 挑起点，满了就沿环交给下一个还有空位的 engine，整圈都满才销毁帧并返回 false（ADR-0004 / ADR-0005）。`engine_at(i)` 是测试与 demo 的入口。
+- **scheduler 是进程内单例**（ADR-0010，推翻 ADR-0002）：`scheduler::init(n)` 建（或重建）N 个 engine；没 init 时由第一次 `submit` / `size()` / `engine_at()` 按 `hardware_concurrency()` 兜底建池，构造本身不启动线程。`stop()` 让每个 engine 排空已入队任务后退出，析构即 `stop()`。放置只有一个规则：`m_next.fetch_add(1) % n` 挑起点，满了就沿环交给下一个还有空位的 engine，整圈都满才销毁帧并返回 false（ADR-0004 / ADR-0005）。`engine_at(i)` 是测试与 demo 的入口。
 - **trace 是环境级的**：`llco::trace` 是命名空间而非对象（不做单例）；`trace::scope` 构造发 `B`、析构发 `E`，RAII 保证配对；每线程一条线程轨道（`thread_local` 缓冲 + 全局注册表，线程退出时搬进 `finished`），`trace::flush(path)` 写出 Chromium JSON 并排空。引擎埋点受 `LLCO_TRACE` 编译期开关控制，默认 0 时 `run_once()` 一行都不多。
 
 ## 一次任务的生命周期

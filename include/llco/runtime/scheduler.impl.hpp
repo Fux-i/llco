@@ -7,12 +7,8 @@
 namespace llco {
 
 inline auto scheduler::instance() -> scheduler & {
-    static scheduler sc{std::thread::hardware_concurrency()};
+    static scheduler sc;
     return sc;
-}
-
-inline scheduler::scheduler(unsigned count) {
-    start(count);
 }
 
 inline scheduler::~scheduler() {
@@ -21,6 +17,7 @@ inline scheduler::~scheduler() {
 
 inline void scheduler::start(unsigned count) {
     halt();
+    m_started.store(true, std::memory_order_release);
     if (count == 0)
         count = 1;
     m_engines.clear();
@@ -37,9 +34,17 @@ inline void scheduler::start(unsigned count) {
 }
 
 inline void scheduler::halt() {
+    // stop() on a scheduler nobody started must not be undone by a later lazy start
+    m_started.store(true, std::memory_order_release);
     m_running = false;
     for (auto &e : m_engines)
         e->stop();
+}
+
+inline void scheduler::ensure_started() {
+    if (m_started.load(std::memory_order_acquire))
+        return;
+    std::call_once(m_default_pool, [this] { start(std::thread::hardware_concurrency()); });
 }
 
 inline void scheduler::init(unsigned count) {
@@ -51,16 +56,21 @@ inline void scheduler::stop() {
 }
 
 inline auto scheduler::size() -> unsigned {
-    return static_cast<unsigned>(instance().m_engines.size());
+    auto &s = instance();
+    s.ensure_started();
+    return static_cast<unsigned>(s.m_engines.size());
 }
 
 inline auto scheduler::engine_at(unsigned index) -> engine & {
-    return *instance().m_engines[index];
+    auto &s = instance();
+    s.ensure_started();
+    return *s.m_engines[index];
 }
 
 template <class T>
 auto scheduler::submit(task<T> &&t) -> bool {
     auto &s = instance();
+    s.ensure_started();
     if (!s.m_running) {
         t.release().destroy();
         return false;

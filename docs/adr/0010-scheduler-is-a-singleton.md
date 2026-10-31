@@ -8,7 +8,7 @@ ADR-0002 当初拒绝单例的理由是"测试需要同时存在两个互不干�
 
 ## 1. 形态
 
-- `scheduler::instance()` 是私有 Meyers 静态，首次用到时按 `hardware_concurrency()` 建池，所以不写 `init()` 也能直接 `submit`。
+- `scheduler::instance()` 是私有 Meyers 静态，**建池与实例化分离**：构造不启动任何 engine，`init(n)` 建 `n` 个；没写 `init()` 时由第一次 `submit` / `size()` / `engine_at()` 按 `hardware_concurrency()` 兜底（`std::call_once`，并发首次提交也只建一次池），所以不写 `init()` 也能直接 `submit`。
 - `init(n)` 幂等重建：先 `stop()` 旧池，再建 `n` 个 engine（`n == 0` 夹到 1）。**同一个 n 也重建**——这是测试的归零点，不能省。
 - `stop()` 让每个 engine 排空已入队任务后退出，但**保留 engine 对象**：`loop_count()`、`wakeup_count()`、`ring().running_io()` 在 stop 之后仍然可读（demo 打印统计、测试断言关停都依赖它）。之后 `submit` 返回 `false`，要靠 `init(n)` 恢复。
 - 析构 = `stop()`，所以 `main` 不需要写任何收尾。

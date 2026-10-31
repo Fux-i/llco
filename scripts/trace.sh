@@ -1,27 +1,34 @@
 #!/usr/bin/env bash
-# Runs a trace-emitting demo from the trace preset and validates its JSON output.
-# Usage: scripts/trace.sh [demo]   (demo defaults to "trace")
-# The demo must call trace::flush(argv[1]); tests and other programs write no trace.
+# Builds one example in the trace preset, runs it in its own directory, and validates the
+# trace.json it writes. Run it by hand; no test and no CI invokes this script.
+# Usage: scripts/trace.sh [demo]   (demo defaults to "run")
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+demo="${1:-run}"
 build="$root/build/_trace"
-demo="${1:-trace}"
-out="$build/traces/$demo.json"
+out="$build/traces/$demo"
 
 cd "$root"
 cmake --preset trace > /dev/null
 cmake --build --preset trace --target "$demo" > /dev/null
-mkdir -p "$build/traces"
+mkdir -p "$out"
 
-"$build/bin/$demo" "$out"
-[[ -f "$out" ]] || {
-    echo "error: $demo wrote no trace to $out; a demo must call trace::flush(argv[1])" >&2
-    exit 1
-}
-python3 -m json.tool "$out" > /dev/null
+if [[ "$demo" == echo_server ]]; then
+    # It runs until Ctrl-C, so poke it once and then ask it to shut down cleanly.
+    ( cd "$out" && exec "$build/bin/$demo" ) &
+    server=$!
+    sleep 1
+    printf 'hello\n' | nc -N 127.0.0.1 7000 > /dev/null
+    kill -INT "$server"
+    wait "$server"
+else
+    ( cd "$out" && exec "$build/bin/$demo" )
+fi
+
+python3 -m json.tool "$out/trace.json" > /dev/null
 
 echo
-echo "trace : $out"
+echo "trace : $out/trace.json"
 echo "open  : https://ui.perfetto.dev, drag the file in"
 echo "note  : the demo runs in microseconds, press W in Perfetto to zoom in"

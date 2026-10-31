@@ -1,32 +1,30 @@
-#include <iostream>
+#include <llco/config.hpp>
 #include <llco/llco.hpp>
+#include <llco/trace/trace.decl.hpp>
+#include <print>
+#include <thread>
 
 using namespace llco;
 
 namespace {
 
-task<> resumer(engine *target, int *steps) {
-    std::cout << "  [body] before the resume_on\n";
-    *steps = 1;
-    co_await resume_on(*target);
-    std::cout << "  [body] after the resume_on\n";
-    *steps = 2;
+task<> resumer() {
+    std::println("[body] start on thread {}", std::this_thread::get_id());
+    co_await resume_on(scheduler::engine_at(1)); // hand the frame over to the other engine
+    std::println("[body] resumed on thread {}", std::this_thread::get_id());
+    co_return;
 }
 
 } // namespace
 
 int main() {
-    engine e;
-    int    steps = 0;
+#if LLCO_TRACE
+    trace::set_thread_name("main");
+#endif
+    scheduler::init(2);
 
-    const bool queued = e.spawn(resumer(&e, &steps));
-    std::cout << "[main] spawn -> " << queued << '\n';
-
-    const bool started = e.run_once();
-    std::cout << "[main] run_once() -> " << started << '\n';
-    std::cout << "[main] the body is parked in the queue: steps = " << steps << '\n';
-
-    const auto drained = e.drain();
-    std::cout << "[main] drain() -> " << drained << " handle(s) left\n";
-    std::cout << "[main] resumed by the queue: steps = " << steps << '\n';
+    sync_run(resumer()); // starts on engine 0, continues on engine 1
+#if LLCO_TRACE
+    trace::flush("trace.json");
+#endif
 }

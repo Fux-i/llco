@@ -1,4 +1,6 @@
+#include <llco/config.hpp>
 #include <llco/llco.hpp>
+#include <llco/trace/trace.decl.hpp>
 #include <print>
 #include <thread>
 #include <utility>
@@ -8,6 +10,8 @@ using namespace llco;
 
 namespace {
 
+constexpr int BATCH = 2;
+
 task<> report(int id) {
     std::println("[task {}] thread {}", id, std::this_thread::get_id());
     co_return;
@@ -16,26 +20,26 @@ task<> report(int id) {
 } // namespace
 
 int main() {
-    // No scheduler object and no init(): the pool is built on first use, with
-    // hardware_concurrency() engines, and its destructor stops it at exit.
+#if LLCO_TRACE
+    trace::set_thread_name("main");
+#endif
 
-    // run() submits and returns.
-    run(report(1));
+    run(report(1)); // submits and returns
 
-    // A TaskMaker is any callable that hands back a task. A coroutine lambda has
-    // to spell out its return type: co_return cannot live in a deduced one.
+    // A coroutine lambda must spell out its return type: co_return has no deduced one.
     run([] -> task<> {
         std::println("[lambda] thread {}", std::this_thread::get_id());
         co_return;
     });
 
-    // sync_run() submits and blocks until every task has finished.
-    sync_run(report(2), report(3));
+    sync_run(report(2), report(3)); // submits and blocks until all of them finish
 
-    // A TaskBatch is an rvalue range of tasks, consumed by the call.
     std::vector<task<>> batch;
-    batch.reserve(2);
-    for (int id = 4; id < 6; ++id) // NOLINT(cppcoreguidelines-avoid-magic-numbers): demo labels
+    for (int id = 4; id < 4 + BATCH; ++id)
         batch.push_back(report(id));
-    sync_run(std::move(batch));
+    sync_run(std::move(batch)); // a rvalue range of tasks
+
+#if LLCO_TRACE
+    trace::flush("trace.json");
+#endif
 }

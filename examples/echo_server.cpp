@@ -21,7 +21,9 @@ constexpr auto CHUNK = std::size_t{4096};
 
 // Echoes one connection until the peer stops writing.
 task<> echo(int fd) {
-    const trace::scope      slice{"echo"}; // spans the whole connection
+#if LLCO_TRACE
+    const trace::async_scope slice{"echo"}; // survives the suspensions, so it needs no nesting
+#endif
     net::connection         conn{current_engine()->ring(), fd};
     std::array<char, CHUNK> buffer{};
     for (;;) {
@@ -31,6 +33,7 @@ task<> echo(int fd) {
         co_await conn.send(std::string_view{buffer.data(), *bytes});
         std::println("[echo] {} bytes", *bytes);
     }
+    std::println("[close] fd {}", fd);
     conn.shutdown();
     co_return;
 }

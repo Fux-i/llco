@@ -18,9 +18,10 @@ namespace detail {
 
 // One slice boundary; names are literals, so no string is copied per event.
 struct event {
-    const char  *name;
-    char         phase;
-    std::int64_t ts;
+    const char   *name;
+    char          phase;
+    std::int64_t  ts;
+    std::uint32_t id; // only the async phases use it
 };
 
 // Everything one thread buffered, plus the lane label used in the JSON.
@@ -52,13 +53,19 @@ class lane {
     CLASS_NO_COPY_MOVE(lane);
 
     void set_name(std::string_view name);
-    void push(const char *name, char phase);
+    void push(const char *name, char phase, std::uint32_t id = 0);
     void append_json(std::string &out) const;
     void clear();
 };
 
 auto registry_ref() -> registry &;
 auto current_lane() -> lane &;
+
+// one id per async span, so its two halves meet across suspensions
+inline auto next_async_id() noexcept -> std::uint32_t {
+    static std::atomic<std::uint32_t> next{1};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
 
 // monotonic clock in microseconds, the unit Chrome Trace expects
 inline auto now_us() -> std::int64_t {
@@ -93,8 +100,8 @@ inline void lane::set_name(std::string_view name) {
     m_data.name = name;
 }
 
-inline void lane::push(const char *name, char phase) {
-    m_data.events.push_back(event{.name = name, .phase = phase, .ts = now_us()});
+inline void lane::push(const char *name, char phase, std::uint32_t id) {
+    m_data.events.push_back(event{.name = name, .phase = phase, .ts = now_us(), .id = id});
 }
 
 inline void lane::append_json(std::string &out) const {
@@ -119,6 +126,11 @@ inline void lane_data::append_json(std::string &out) const {
         out += event.phase;
         out += R"(","ts":)";
         out += std::to_string(event.ts);
+        if (event.phase == 'b' || event.phase == 'e') {
+            // an async slice is matched by category and id, never by nesting
+            out += R"(,"cat":"llco","id":)";
+            out += std::to_string(event.id);
+        }
         out += R"(,"pid":1,"tid":)";
         out += std::to_string(tid);
         out += "},\n";
@@ -138,6 +150,15 @@ inline scope::scope(const char *name) noexcept : m_name(name) {
 
 inline scope::~scope() {
     detail::current_lane().push(m_name, 'E');
+}
+
+inline async_scope::async_scope(const char *name) noexcept
+    : m_name{name}, m_id{detail::next_async_id()} {
+    detail::current_lane().push(m_name, 'b', m_id);
+}
+
+inline async_scope::~async_scope() {
+    detail::current_lane().push(m_name, 'e', m_id);
 }
 
 inline void set_thread_name(std::string_view name) {

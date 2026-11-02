@@ -168,6 +168,31 @@ task<> read_once(engine *e, int fd, std::span<char> buffer, std::atomic<bool> *d
 
 } // namespace
 
+TEST(trace, async_scope_pairs_by_id) {
+    trace::set_thread_name("async");
+    {
+        const trace::async_scope span{"conn"};
+        const trace::scope       inner{"inner"};
+    }
+    ASSERT_TRUE(trace::flush(TRACE_PATH)) << "flush could not write the file";
+    const auto json = slurp(TRACE_PATH);
+    std::remove(TRACE_PATH);
+
+    EXPECT_EQ(count_of(json, R"("ph":"b")"), 1U) << "async spans open with b";
+    EXPECT_EQ(count_of(json, R"("ph":"e")"), 1U) << "async spans close with e";
+    EXPECT_EQ(count_of(json, R"("cat":"llco")"), 2U);
+
+    const auto first  = json.find(R"("cat":"llco","id":)");
+    const auto second = json.find(R"("cat":"llco","id":)", first + 1);
+    ASSERT_NE(first, std::string::npos);
+    ASSERT_NE(second, std::string::npos);
+    const auto id_at = [&json](std::size_t pos) {
+        const auto start = json.find(R"("id":)", pos) + 5;
+        return json.substr(start, json.find_first_not_of("0123456789", start) - start);
+    };
+    EXPECT_EQ(id_at(first), id_at(second)) << "both halves must carry the same id";
+}
+
 TEST(trace, engine_emits_reap_slices) {
     std::array<int, 2> fds{};
     ASSERT_EQ(::pipe(fds.data()), 0);

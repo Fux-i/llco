@@ -2,6 +2,7 @@
 
 #include <llco/attr.hpp>
 
+#include <cstdint>
 #include <string_view>
 
 namespace llco::trace {
@@ -15,6 +16,18 @@ class scope {
     explicit scope(const char *name) noexcept;
     ~scope();
     CLASS_NO_COPY_MOVE(scope);
+};
+
+// One span that may cross suspensions: emits the async begin/end pair, so it needs no nesting.
+class async_scope {
+  private:
+    const char   *m_name;
+    std::uint32_t m_id;
+
+  public:
+    explicit async_scope(const char *name) noexcept;
+    ~async_scope();
+    CLASS_NO_COPY_MOVE(async_scope);
 };
 
 // Names the calling thread's lane; defaults to thread-<tid>.

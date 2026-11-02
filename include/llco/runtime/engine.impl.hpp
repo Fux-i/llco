@@ -133,8 +133,14 @@ inline void engine::loop(const std::stop_token &token) {
     for (;;) {
         ++m_loops;
         (void)drain();
-        ring().submit();     // one enter per batch; nothing pending costs no syscall
-        (void)ring().reap(); // completions that landed inside submit(), or since the last wakeup
+        ring().submit(); // one enter per batch; nothing pending costs no syscall
+        {
+#if LLCO_TRACE
+            const trace::scope slice{"reap"}; // one slice per completion batch
+#endif
+            // completions that landed inside submit(), or since the last wakeup
+            (void)ring().reap();
+        }
         // Stop only once the kernel holds nothing of ours: the ops were submitted by this
         // thread, and it gets them cancelled the moment it exits.
         if (token.stop_requested() && m_queue.empty() && ring().running_io() == 0)

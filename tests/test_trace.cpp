@@ -100,11 +100,16 @@ TEST(trace, keeps_one_lane_per_thread) {
 
 #if LLCO_TRACE
 #include <llco/core/task.hpp>
+#include <llco/io/op.decl.hpp>
 #include <llco/runtime/engine.decl.hpp>
 #include <llco/runtime/scheduler.decl.hpp>
 
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <span>
+
+#include <unistd.h>
 
 namespace {
 
@@ -151,6 +156,40 @@ TEST(trace, scheduler_names_lanes) {
 
     EXPECT_NE(json.find(R"("name":"engine-0")"), std::string::npos) << "engines need lane names";
     EXPECT_NE(json.find(R"("name":"engine-1")"), std::string::npos);
+}
+
+namespace {
+
+task<> read_once(engine *e, int fd, std::span<char> buffer, std::atomic<bool> *done) {
+    (void)co_await io::read(e->ring(), fd, std::as_writable_bytes(buffer));
+    done->store(true);
+    co_return;
+}
+
+} // namespace
+
+TEST(trace, engine_emits_reap_slices) {
+    std::array<int, 2> fds{};
+    ASSERT_EQ(::pipe(fds.data()), 0);
+
+    std::array<char, 5> buffer{};
+    std::atomic<bool>   done{false};
+
+    engine e;
+    e.start();
+    ASSERT_TRUE(e.spawn(read_once(&e, fds[0], buffer, &done)));
+    while (e.ring().running_io() == 0)
+        std::this_thread::sleep_for(LANE_POLL);
+    ASSERT_EQ(::write(fds[1], "hello", 5), 5);
+    while (!done.load())
+        std::this_thread::sleep_for(LANE_POLL);
+    e.stop();
+
+    ASSERT_TRUE(trace::flush(TRACE_PATH)) << "flush could not write the file";
+    const auto json = slurp(TRACE_PATH);
+    std::remove(TRACE_PATH);
+
+    EXPECT_GT(count_of(json, R"("name":"reap")"), 0U) << "a kernel completion batch needs a slice";
 }
 
 TEST(trace, scheduler_init_leaves_only_n_lanes) {

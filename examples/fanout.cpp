@@ -53,6 +53,6 @@ int main() {
     std::println("");
 
 #if LLCO_TRACE
-    trace::flush("trace.json");
+    (void)trace::flush("trace.json");
 #endif
 }

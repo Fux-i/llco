@@ -25,6 +25,6 @@ int main() {
 
     sync_run(resumer()); // starts on engine 0, continues on engine 1
 #if LLCO_TRACE
-    trace::flush("trace.json");
+    (void)trace::flush("trace.json");
 #endif
 }

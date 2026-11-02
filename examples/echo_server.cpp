@@ -21,6 +21,7 @@ constexpr auto CHUNK = std::size_t{4096};
 
 // Echoes one connection until the peer stops writing.
 task<> echo(int fd) {
+    const trace::scope      slice{"echo"}; // spans the whole connection
     net::connection         conn{current_engine()->ring(), fd};
     std::array<char, CHUNK> buffer{};
     for (;;) {
@@ -77,6 +78,6 @@ int main() {
     (void)scheduler::engine_at(0).spawn(cancel_accept(&listener));
     scheduler::stop(); // drains the cancel, then waits for the live connections
 #if LLCO_TRACE
-    trace::flush("trace.json");
+    (void)trace::flush("trace.json");
 #endif
 }

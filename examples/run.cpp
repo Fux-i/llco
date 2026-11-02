@@ -40,6 +40,6 @@ int main() {
     sync_run(std::move(batch)); // a rvalue range of tasks
 
 #if LLCO_TRACE
-    trace::flush("trace.json");
+    (void)trace::flush("trace.json");
 #endif
 }

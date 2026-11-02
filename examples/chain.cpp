@@ -32,6 +32,6 @@ int main() {
     std::println("[main] top() = {}", sync_wait(top()));
 
 #if LLCO_TRACE
-    trace::flush("trace.json");
+    (void)trace::flush("trace.json");
 #endif
 }

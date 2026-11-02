@@ -51,6 +51,6 @@ int main() {
 
     done.acquire();
 #if LLCO_TRACE
-    trace::flush("trace.json");
+    (void)trace::flush("trace.json");
 #endif
 }

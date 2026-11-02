@@ -33,6 +33,6 @@ int main() {
         sync_run(pipeline()); // these scopes nest inside the engine's own "resume" slice
     }
 #if LLCO_TRACE
-    trace::flush("trace.json");
+    (void)trace::flush("trace.json");
 #endif
 }

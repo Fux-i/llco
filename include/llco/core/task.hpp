@@ -35,20 +35,25 @@ struct promise_base {
         template <typename P>
         auto await_suspend(std::coroutine_handle<P> caller) const noexcept -> handle_type {
             auto &promise = caller.promise();
+            // read the tail fields before waking a sync_wait: that thread may return and destroy
+            // the frame while this function still runs
+            const bool        detached     = promise.m_detached;
+            const handle_type continuation = promise.m_continuation;
+            const auto        exception    = promise.m_exception;
+            const auto       *handler      = promise.m_exception_handler;
             // wake a blocked sync_wait before the frame can be destroyed
             if (promise.m_completion != nullptr)
                 promise.m_completion->release();
             // detached promise must have no continuation
-            if (promise.m_detached) {
-                if (promise.m_exception != nullptr)
-                    (*promise.m_exception_handler)(promise.m_exception);
+            if (detached) {
+                if (exception != nullptr)
+                    (*handler)(exception);
                 caller.destroy();
                 return std::noop_coroutine();
             }
-            if (promise.m_continuation != nullptr)
-                return promise.m_continuation;
-            else
-                return std::noop_coroutine();
+            if (continuation != nullptr)
+                return continuation;
+            return std::noop_coroutine();
         }
         void await_resume() const noexcept {}
     };

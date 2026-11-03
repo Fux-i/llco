@@ -3,4 +3,5 @@ build/
 .clangd
 CMakeUserPresets.json
 trace.json
+bench-results/
 .vscode/launch.json

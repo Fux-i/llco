@@ -8,9 +8,12 @@
 #include <llco/trace/trace.decl.hpp>
 #include <print>
 #include <string_view>
+#include <system_error>
 
 #include <csignal>
+#include <netinet/tcp.h>
 #include <pthread.h>
+#include <unistd.h>
 
 using namespace llco;
 
@@ -25,6 +28,8 @@ task<> echo(int fd) {
     const trace::async_scope slice{"echo"}; // survives the suspensions, so it needs no nesting
 #endif
     net::connection         conn{fd};
+    const int               one = 1;
+    (void)::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one); // no Nagle delay
     std::array<char, CHUNK> buffer{};
     for (;;) {
         const auto bytes = co_await conn.recv(buffer);
@@ -42,10 +47,14 @@ task<> echo(int fd) {
 task<> accept_loop(net::listener *listener) {
     for (;;) {
         const auto fd = co_await listener->accept_fd();
-        if (!fd)
-            co_return; // the cancel below is the normal way out
+        if (!fd) {
+            if (fd.error() == std::errc::operation_canceled)
+                co_return; // the cancel below is the normal way out
+            continue;      // EMFILE and friends are transient
+        }
         std::println("[accept] fd {}", *fd);
-        run(echo(*fd));
+        if (!scheduler::submit(echo(*fd)))
+            ::close(*fd); // queue full: drop the connection, not the process (ADR-0004)
     }
 }
 

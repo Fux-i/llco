@@ -1,14 +1,18 @@
 # 施工路线图
 
-这份路线图按"一步只加一个东西"来切：每个里程碑都能单独跑、单独看到输出、单独提交一次 commit。每个里程碑都**测试先行**：先把会失败的用例写进去，确认它失败的原因正是"这个功能还不存在"，再动手实现。
+这份路线图按"一步只加一个东西"来切：每个里程碑都能单独跑、单独看到输出、单独提交一次 commit。
 
-**谁写哪一步**：不必全部手写。建议至少亲手写 **M1（队列语义）、M5（线程循环）、M6（ring + eventfd）** 这三步——它们是这个框架真正难的地方；其余步骤可以先让我写、你 review，或者反过来。
+> 文中的示例文件名与二进制名是当时的：`examples/engine_manual.cpp`、`examples/threaded_engine.cpp` 与 `./build/bin/scheduler` 后来并成了 `examples/run.cpp`（`./build/bin/run`），`scripts/trace.sh scheduler` 对应的命令现在是 `scripts/trace.sh run`。
 
-**节奏约定**
+每个里程碑都**测试先行**：先写会失败的用例，确认它失败的原因正是"这个功能还不存在"，再动手实现。失败应当表现为断言不成立，而不是编译不过——编译不过说明接口还没定，先补声明。
 
-1. 写测试 → 跑，看它**因为正确的理由**失败（不是编译不过，而是断言不成立；编译不过说明接口还没定，先补声明）。
+**难度分布**：M1（队列语义）、M5（线程循环）、M6（ring + eventfd）是这套框架真正难的三步；其余步骤都是在已有机制上叠加，难点更多在接口而不在新机制。
+
+**施工顺序**
+
+1. 写测试 → 跑，确认它**因为正确的理由**失败。
 2. 实现 → 跑，绿。
-3. 跑一个 demo，人眼确认行为（这一步别跳，它是"阶段性成果"的来源）。
+3. 跑一个 demo，人工确认行为：阶段性成果就来自这一步。
 4. commit。
 
 **里程碑一览**
@@ -299,7 +303,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 1. `queue::size()` 转发 `was_size()`，`engine::load()` 返回它——只给测试与 demo 观测积压，不是放置的输入。
 2. `engine::try_adopt(handle)`：接受已 `release()` 的帧，失败时**不**销毁；`spawn` 改成 `release` → `try_adopt` → 失败才 `destroy`（ADR-0004 已订正）。
 3. `scheduler`：进程内单例（ADR-0010），`vector<unique_ptr<engine>>`，`init(n)` 重建池（`n == 0` 夹到 1）；`submit` 从 `m_next.fetch_add(1) % n` 起沿环扫一圈，整圈都满才 `destroy()` 并返回 false。没有策略接口、没有 `least_loaded`（ADR-0005）。
-4. 跨 engine 继续执行走 M3 的 `resume_on`；trace 给每个 engine 的线程轨道命名 `engine-i`（只在 `LLCO_TRACE` 构建里存在；不做 flow 箭头，原因见 `docs/ig_/M8`）。
+4. 跨 engine 继续执行走 M3 的 `resume_on`；trace 给每个 engine 的线程轨道命名 `engine-i`（只在 `LLCO_TRACE` 构建里存在；不做 flow 箭头，因为 `resume_on` 的 `await_suspend` 只拿到类型擦除的句柄，够不到 promise）。
 
 **完成标志**：`./build/bin/scheduler` 把 1000 个任务均分到 4 条线程，跨引擎继续执行前后线程 id 不同；`./scripts/trace.sh scheduler` 出的 trace 里能看到 `main` + `engine-0..3` 五条线程轨道与 `resume` 切片；四套构建 ctest 全绿（default 36、asan 36、trace 38、gcc 36）。
 
@@ -363,11 +367,11 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 4. 组合写法：`when_all` = latch；`when_any` = `shared_ptr<event<T>>`（见 architecture 的"同步原语与组合写法"）。
 5. demo：8 个子任务 fan-out / fan-in。
 
-**完成标志**：`./build/bin/fanout` 打印 8 个 20 ms 子任务总耗时 ≈ 20–25 ms（串行是 160 ms）；四套构建 ctest 全绿（default 50、asan 50、trace 52、gcc 50）；lint 干净。
+**完成标志**：`./build/bin/fanout` 打印 8 个 20 ms 子任务总耗时 ≈ 41 ms（4 个 engine，两轮；串行 160 ms）；四套构建 ctest 全绿（default 50、asan 50、trace 52、gcc 50）；lint 干净。
 
 **陷阱**
 
-- **侵入式等待者栈的两个陷阱**：已发布的节点绝不能让 waiter 自己继续，否则 `set()` 会二次唤醒并触碰可能已销毁的节点；`set()` 遍历时先读 `next` 再唤醒。（讨论时我把它说成"丢唤醒"，写复现时发现按 store-before-exchange + acquire/release 的顺序丢唤醒其实不成立——真正的问题是双重 resume / UAF，详见 `docs/ig_/M10`。）
+- **侵入式等待者栈的两个陷阱**：已发布的节点绝不能让 waiter 自己继续，否则 `set()` 会二次唤醒并触碰可能已销毁的节点；`set()` 遍历时先读 `next` 再唤醒。（讨论时我把它说成"丢唤醒"，写复现时发现按 store-before-exchange + acquire/release 的顺序丢唤醒其实不成立——真正的问题是双重 resume / UAF。）
 - **`set()` 一律投递，同 engine 也不内联**：否则 `set` 的调用栈里会跑任意用户代码，测试也无法确定性断言"是否投递"。
 - **没有 engine 归属的协程只能内联恢复**：`sync_wait` 的 root 与 manual engine 驱动的协程都是这种；代价是"被唤醒的代码可能跑在 setter 的线程上"。
 - **重复 `set` 必须忽略**：用单独的 setter 标志竞争"唯一 setter"身份，避免第二个 `set` 覆盖值。
@@ -380,7 +384,7 @@ auto await_suspend(std::coroutine_handle<> h) noexcept -> std::coroutine_handle<
 
 **目标**：真正的 `read` / `write` awaiter，不引入 IO 虚接口（只有一个后端）。完成。
 
-**改动**：`include/llco/io/io_uring.decl.hpp` + `io_uring.impl.hpp`（`rw_awaiter` + 两个工厂、`ring::reap()` 分发、`running_io()` / `sq_pending()`）、`runtime/engine.impl.hpp`（循环里 `submit()`、阻塞条件加 `sq_pending() == 0`、循环退出现在等 `running_io() == 0`、`stop()` 的尾部 drain）、`config.hpp`（`RING_ENTRIES` 注释）、`tests/test_io.cpp`（+7）、`examples/io_read.cpp`、ADR-0006、`docs/ig_/M11/`。
+**改动**：`include/llco/io/io_uring.decl.hpp` + `io_uring.impl.hpp`（`rw_awaiter` + 两个工厂、`ring::reap()` 分发、`running_io()` / `sq_pending()`）、`runtime/engine.impl.hpp`（循环里 `submit()`、阻塞条件加 `sq_pending() == 0`、循环退出现在等 `running_io() == 0`、`stop()` 的尾部 drain）、`config.hpp`（`RING_ENTRIES` 注释）、`tests/test_io.cpp`（+7）、`examples/io_read.cpp`、ADR-0006。
 
 **接口**
 
@@ -426,8 +430,8 @@ ring 必须显式传进去：op 只能在 ring 属主线程上提交，没有"�
 
 **陷阱**
 
-- **提交 op 的线程一退出，内核就取消这个 op**（`-ECANCELED`，实测 `res=-125`）：第一版把排空放在 `join()` 之后的调用线程上，协程里抛 `Operation canceled`，detached 任务直接 `terminate`。修法：排空回到循环线程（退出条件带 `running_io() == 0`）。最小复现 `docs/ig_/M11/01_*`。
-- **`get_sqe()` 的 NULL 分支会被优化掉**：调用方无条件解引用返回值，优化器断定 NULL 不可达；2 槽 ring 在 `-O2` 下安静发出第 3 个 SQE，`-O0` 才崩。修法：`while (sqe == nullptr) { submit(); sqe = sqe(); }`，既消灭 UB，也正好是 SQ 满策略。复现 `docs/ig_/M11/02_*`。
+- **提交 op 的线程一退出，内核就取消这个 op**（`-ECANCELED`，实测 `res=-125`）：第一版把排空放在 `join()` 之后的调用线程上，协程里抛 `Operation canceled`，detached 任务直接 `terminate`。修法：排空回到循环线程（退出条件带 `running_io() == 0`）。
+- **`get_sqe()` 的 NULL 分支会被优化掉**：调用方无条件解引用返回值，优化器断定 NULL 不可达；2 槽 ring 在 `-O2` 下安静发出第 3 个 SQE，`-O0` 才崩。修法：`while (sqe == nullptr) { submit(); sqe = sqe(); }`，既消灭 UB，也正好是 SQ 满策略。
 - **`get_sqe()` 不清 `user_data`**（只清八个字段）：无 awaiter 的 op 必须显式 `set_data(nullptr)`，否则分发时把旧值当指针解引用。
 - **`io_uring_queue_exit` 不等也不取消**（仍有未完成 op 时 37 µs 返回）：`~ring` 之后内核不会再交回 CQE，所以"等 op 完成"必须在 ring 仍存活的时候做。
 - **优雅停机对自我续期的任务无界**：echo 的 read 循环一被恢复就 re-arm 新 op，`running_io` 不归零，`stop()` / `~engine` 会一直等；强制切断要等取消机制（见"延伸"）。
@@ -437,7 +441,7 @@ ring 必须显式传进去：op 只能在 ring 属主线程上提交，没有"�
 
 **目标**：网络组件，验证 IO 层可用。完成。
 
-**改动**：`io/io_uring.*`（`completion` 基类 + `accept` / `connect` / `send` / `recv` / `cancel` 五个 awaiter）、`net/socket.decl.hpp` + `.impl.hpp`（`listen_tcp` / `local_port` / `tcp_socket` / `loopback`）、`examples/echo_server.cpp`、`tests/test_io.cpp`（+5）、`tests/test_tcp.cpp`（新建，4 条）、ADR-0007、`docs/ig_/M12/`。
+**改动**：`io/io_uring.*`（`completion` 基类 + `accept` / `connect` / `send` / `recv` / `cancel` 五个 awaiter）、`net/socket.decl.hpp` + `.impl.hpp`（`listen_tcp` / `local_port` / `tcp_socket` / `loopback`）、`examples/echo_server.cpp`、`tests/test_io.cpp`（+5）、`tests/test_tcp.cpp`（新建，4 条）、ADR-0007。
 
 **接口**
 

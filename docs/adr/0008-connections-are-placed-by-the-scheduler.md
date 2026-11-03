@@ -4,7 +4,7 @@
 
 M13 起，一条连接在 accept 之后由 `scheduler::submit` 决定落在哪个 engine：唯一的 listener 在 engine 0 上，acceptor 用 `listener::accept_fd()` 拿到原始 fd，把 `serve(fd)` 交给 scheduler 的轮转放置；`serve` 在目标 engine 上跑起来后才构造 `net::connection`（ADR-0012 起是 `net::connection{fd}`，取当前 engine 的 ring），此后绑定。llco 不使用 `SO_REUSEPORT`。
 
-这不是省事的默认，而是查完同类实现后的选择：Seastar 当前默认就是“单 listener + 跨核 handoff”（`smp::submit_to`），并且把 reuseport 硬关掉（`posix_reuseport_available()` 直接 `return false`，注释是 “reuseport currently leads to heavy load imbalance”）；Netty、muduo、Folly/Proxygen、Thrift、Node cluster 的 RR 也都是“单 acceptor + 在目标 loop 上首次执行”。对照、引用与本机实测见 `docs/ig_/M13/README.md`。
+这不是省事的默认，而是查完同类实现后的选择：Seastar 当前默认就是“单 listener + 跨核 handoff”（`smp::submit_to`），并且把 reuseport 硬关掉（`posix_reuseport_available()` 直接 `return false`，注释是 “reuseport currently leads to heavy load imbalance”）；Netty、muduo、Folly/Proxygen、Thrift、Node cluster 的 RR 也都是“单 acceptor + 在目标 loop 上首次执行”。
 
 ## Considered Options
 

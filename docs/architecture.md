@@ -106,7 +106,7 @@ M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `r
 - 单例与重建：`init(n)` 每次都换一套 engine（同 n 也重建），这是测试之间的归零点；`stop()` 保留 engine 对象，所以 `loop_count()` / `running_io()` 在关停后仍可读（ADR-0010）。
 - 满载重试**不用** `spawn`：`spawn` 失败即销毁帧，任务会丢失；`try_adopt` 失败时所有权仍在调用方，同一个句柄可以继续试下一个 engine（ADR-0004 已按此订正）。
 - `engine::load()` 是队列长度采样，只给测试与 demo 看积压，不参与放置。
-- 跨 engine 继续执行仍走 M3 的 `resume_on`：目标 engine 只是另一个满足 `Executor` 的对象。trace 里每个 engine 线程把自己的线程轨道命名为 `engine-i`，继续执行表现为同一条 `resume` 切片出现在另一条线程轨道上；不做 flow 箭头，因为 `resume_on` 的 `await_suspend` 只拿到类型擦除的句柄，够不到 promise（见 `docs/ig_/M8`）。
+- 跨 engine 继续执行仍走 M3 的 `resume_on`：目标 engine 只是另一个满足 `Executor` 的对象。trace 里每个 engine 线程把自己的线程轨道命名为 `engine-i`，继续执行表现为同一条 `resume` 切片出现在另一条线程轨道上；不做 flow 箭头，因为 `resume_on` 的 `await_suspend` 只拿到类型擦除的句柄，够不到 promise。
 - 线程轨道命名整段包在 `#if LLCO_TRACE` 里：默认构建没有 `m_lane` 成员、没有 `set_lane`、循环里也没有那一行。
 
 ## 同步原语与组合写法
@@ -134,11 +134,11 @@ const int winner = co_await first->wait();
 
 ## 网络层（M12）
 
-一条连接 = 一个 detached 协程：`accept` 拿到 fd → `recv`/`send` 循环 → 读回 0（EOF）或异常 → `shutdown(SHUT_WR)` → `close`。`accept_loop` 自己也是协程，每接一个连接就 `spawn` 一个回显协程（队列满载按 ADR-0004 丢连接并关 fd）。调用点用的是两个轻量封装（`net::connection` / `net::listener`），`io::` 层仍然只认显式 `ring&`。
+一条连接 = 一个 detached 协程：`accept` 拿到 fd → `recv`/`send` 循环 → 读回 0（EOF）或异常 → `shutdown(SHUT_WR)` → `close`。`accept_loop` 自己也是协程，每接一个连接就提交一个回显任务。调用点用的是两个轻量封装（`net::connection` / `net::listener`），`io::` 层仍然只认显式 `ring&`。
 
 - **数据面只走 `send`/`recv`**：`IORING_OP_WRITE` 在 peer 已关闭时 `res=-32` 且**真的投递 SIGPIPE**（SIG_DFL 下杀进程），`IORING_OP_SEND` 不会；`io::send` 硬编码 `MSG_NOSIGNAL`，不赌内核版本。`read`/`write` 只给 pipe 与文件（ADR-0007）。
 - **提交时机**：`accept`/`connect`/`cancel` 与读写共用同一条路径——awaiter 只填 SQE，循环统一 `submit`；`connect` 的 `sockaddr_in` 被内核在提交时拷走，所以地址只需活到协程挂起期间。
-- **关停**：`stop()` 要等 `running_io() == 0`，而监听 fd 上的 pending accept 永远等不到——`io::cancel(ring, fd)` 把它打断成 `-ECANCELED`；cancel 自己返回 `0`，没有可取消的 op 时 `-ENOENT`（映射成 `false`，不是异常）。demo 的收尾是：信号 → `sync_wait` 一个先 `resume_on` 到 engine 的 cancel 任务 → `stop()` → `close(listener)`。
+- **关停**：`stop()` 要等 `running_io() == 0`，而监听 fd 上的 pending accept 永远等不到——`io::cancel(ring, fd)` 把它打断成 `-ECANCELED`；cancel 自己返回 `0`，没有可取消的 op 时 `-ENOENT`（映射成 `false`，不是异常）。demo 的收尾是：信号 → `sync_run_at(0, ...)` 调 cancel → `stop()` → `close(listener)`。
 - **fd 契约**：listener 与 accepted fd 都是非阻塞 + close-on-exec；关掉之前该 fd 上不能有未完成 op。IPv4 only（`connect` 收 `sockaddr_in`）。
 - **错误语义**：内核返回值可能是负数的稳态操作（read/write/recv/send/accept/connect/cancel）一律返回 `std::expected<T, std::error_code>`，不抛；只有启动期与不变量失败才抛，未捕获即终止（ADR-0009）。
 - **两个轻量封装**：`net::connection{fd}` / `net::listener{port}` 把当前 engine 的 ring 和 fd 收进对象，`{ring, fd}` / `{ring, port}` 留给 manual engine、caller 线程与非默认归属（ADR-0012）——成员函数直接返回 awaiter（`conn.recv(buf)`、`conn.send(view)`），`listener.accept()` 的 `await_resume` 是 `expected<connection, error_code>`，`listener.cancel()` 就是收尾那一发取消。fd 由析构关闭，`connection` 可 move（源置 -1），所以"把连接 move 进 `spawn` 的帧、帧被销毁时关 fd"是自动的。
@@ -227,3 +227,12 @@ include/llco/
 ## 未决与延伸（明确不做在近期）
 
 work stealing、协作式取消（`stop_token` 传播）、优先级队列、手写 MPMC 队列替换 atomic_queue、队列满时的阻塞策略、TCP 之外的网络功能。这些都不影响当前的模块边界。
+
+## 已知边界
+
+- **scheduler 的生命周期与 submit 不并发**：`scheduler::init` / `stop` 只在启动与收尾调用，不得与 `submit` 并发——`init` 换的是整张 engine 表、`stop` 改的是 `m_running`，这些状态转换没有锁保护。
+- **`engine_at(i)` 的前置条件**：要求 `i < size()`。debug 构建里是 `assert`（本仓库四套 preset 都是 Release，`NDEBUG` 下断言不生效），release 构建没有运行时检查；从未 `init` 就 `stop()` 之后再取 engine，或 `i` 越界，都是未定义行为。
+- **`trace::flush` 只能在没有其它线程产生事件时调用**：典型时机是所有 engine 都已停止；lane 的 `push` 无锁，只往本线程缓冲里追加，flush 期间并发产生的事件会与写出竞争。
+- **`stop()` 对自我续期的任务无界**：连接上待完成的 `recv` 会让 `running_io` 永不归零，`stop()` 就一直等；这类任务需要先 `io::cancel` 打断。
+- **网络层边界**：IPv4 only（`connect` 收 `sockaddr_in`）；没有超时、没有 `TCP_NODELAY`、没有连接数上限。
+- **队列满载**：`scheduler::submit` 返回 `false` 且帧被销毁，调用方必须检查返回值（ADR-0004）。

@@ -30,9 +30,12 @@
 namespace {
 
 constexpr std::uint64_t NS_PER_SECOND   = 1'000'000'000;
-constexpr std::size_t   RECV_CAP        = 64 * 1024;   // per-connection receive buffer floor
-constexpr std::size_t   BATCH           = 64;          // epoll events per wait
-constexpr std::uint64_t FINISH_GRACE_NS = 250'000'000; // cap on the post-run drain
+constexpr double        NS_PER_US       = 1'000.0;                // nanoseconds per microsecond
+constexpr double        US_PER_SECOND   = 1'000'000.0;            // microseconds per second
+constexpr std::size_t   SEQ_BYTES       = sizeof(std::uint64_t);  // message header: the sequence
+constexpr std::size_t   RECV_CAP        = std::size_t{64} * 1024; // per-connection receive floor
+constexpr std::size_t   BATCH           = 64;                     // epoll events per wait
+constexpr std::uint64_t FINISH_GRACE_NS = 250'000'000;            // cap on the post-run drain
 constexpr int           FINISH_POLL_MS  = 10;
 
 // Command-line configuration; the defaults match the echo server's defaults.
@@ -52,15 +55,18 @@ struct config {
 [[noreturn]]
 void fail(std::string_view msg) {
     std::println(stderr, "error: {}", msg);
-    std::fflush(stderr);
+    (void)std::fflush(stderr);
     std::exit(EXIT_FAILURE);
 }
 
 // Parses one flag value as an unsigned integer, rejecting trailing junk.
 auto parse_u64(std::string_view text, std::string_view flag) -> std::uint64_t {
-    std::uint64_t value  = 0;
-    const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
-    if (ec != std::errc{} || end != text.data() + text.size())
+    const char *const first = text.data();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): a [first, last) range
+    const char       *last  = first + text.size();
+    std::uint64_t     value = 0;
+    const auto [end, ec]    = std::from_chars(first, last, value);
+    if (ec != std::errc{} || end != last)
         fail(std::format("bad value for {}", flag));
     return value;
 }
@@ -69,6 +75,7 @@ auto parse_u64(std::string_view text, std::string_view flag) -> std::uint64_t {
 auto parse(int argc, char **argv) -> config {
     config cfg;
     for (int i = 1; i < argc; ++i) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): argv is a C array
         const std::string_view arg{argv[i]};
         if (arg == "--csv") {
             cfg.csv = true;
@@ -76,6 +83,7 @@ auto parse(int argc, char **argv) -> config {
         }
         if (i + 1 >= argc)
             fail(std::format("missing value for {}", arg));
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): argv is a C array
         const std::string_view value{argv[++i]};
         if (arg == "--host")
             cfg.host = value;
@@ -96,7 +104,7 @@ auto parse(int argc, char **argv) -> config {
         else
             fail(std::format("unknown flag {}", arg));
     }
-    if (cfg.size < 8)
+    if (cfg.size < SEQ_BYTES)
         fail("--size must be at least 8");
     if (cfg.depth == 0)
         fail("--depth must be positive");
@@ -115,8 +123,8 @@ class histogram {
     static constexpr std::uint64_t COARSE_NS   = 16'000;
     static constexpr std::uint64_t FINE_MAX_NS = FINE * FINE_NS;
 
-    std::array<std::uint64_t, BUCKETS> counts_{};
-    std::uint64_t                      total_ = 0;
+    std::array<std::uint64_t, BUCKETS> m_counts{};
+    std::uint64_t                      m_total = 0;
 
   public:
     // Records one latency sample in nanoseconds; anything past the last bucket lands there.
@@ -124,40 +132,43 @@ class histogram {
         const auto index =
             ns < FINE_MAX_NS ? ns / FINE_NS
                              : FINE + std::min((ns - FINE_MAX_NS) / COARSE_NS, BUCKETS - FINE - 1);
-        ++counts_[index];
-        ++total_;
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index): index is clipped
+        ++m_counts[index];
+        ++m_total;
     }
 
     // Adds another histogram's counts, used to merge the per-thread samples.
     void merge(const histogram &other) {
         for (std::size_t i = 0; i < BUCKETS; ++i)
-            counts_[i] += other.counts_[i];
-        total_ += other.total_;
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index): index is bounded
+            m_counts[i] += other.m_counts[i];
+        m_total += other.m_total;
     }
 
     // Percentile in microseconds, linearly interpolated inside the bucket that holds the rank.
     auto quantile(double q) const -> double {
-        if (total_ == 0)
+        if (m_total == 0)
             return 0.0;
-        const auto    rank   = q * static_cast<double>(total_);
+        const auto    rank   = q * static_cast<double>(m_total);
         std::uint64_t before = 0;
         for (std::size_t i = 0; i < BUCKETS; ++i) {
-            const std::uint64_t count = counts_[i];
-            if (before + count > rank) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index): index is bounded
+            const std::uint64_t count = m_counts[i];
+            if (static_cast<double>(before + count) > rank) {
                 const auto lo   = static_cast<double>(lower_ns(i));
                 const auto hi   = static_cast<double>(upper_ns(i));
                 const auto frac = (rank - static_cast<double>(before)) / static_cast<double>(count);
-                return (lo + (hi - lo) * frac) / 1'000.0;
+                return (lo + ((hi - lo) * frac)) / NS_PER_US;
             }
             before += count;
         }
-        return static_cast<double>(upper_ns(BUCKETS - 1)) / 1'000.0;
+        return static_cast<double>(upper_ns(BUCKETS - 1)) / NS_PER_US;
     }
 
   private:
     // Lower bound of a bucket in nanoseconds.
     static auto lower_ns(std::size_t index) -> std::uint64_t {
-        return index < FINE ? index * FINE_NS : FINE_MAX_NS + (index - FINE) * COARSE_NS;
+        return index < FINE ? index * FINE_NS : FINE_MAX_NS + ((index - FINE) * COARSE_NS);
     }
 
     // Upper bound of a bucket in nanoseconds.
@@ -215,11 +226,16 @@ auto resolve(std::string_view host, std::uint16_t port) -> sockaddr_in {
 // Opens one connected socket with TCP_NODELAY and O_NONBLOCK.
 auto connect_to(const sockaddr_in &addr) -> int {
     const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0)
+        fail(std::format("socket: {}", std::strerror(errno)));
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): sockaddr_in is a sockaddr
     if (::connect(fd, reinterpret_cast<const sockaddr *>(&addr), sizeof addr) < 0)
         fail(std::format("connect: {}", std::strerror(errno)));
     const int one   = 1;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): fcntl has no typed wrapper
     const int flags = ::fcntl(fd, F_GETFL);
     ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): fcntl has no typed wrapper
     ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     return fd;
 }
@@ -228,62 +244,64 @@ auto connect_to(const sockaddr_in &addr) -> int {
 auto cpu_seconds() -> double {
     rusage usage{};
     ::getrusage(RUSAGE_SELF, &usage);
-    return static_cast<double>(usage.ru_utime.tv_sec) +
-           static_cast<double>(usage.ru_utime.tv_usec) / 1e6 +
-           static_cast<double>(usage.ru_stime.tv_sec) +
-           static_cast<double>(usage.ru_stime.tv_usec) / 1e6;
+    const auto user = static_cast<double>(usage.ru_utime.tv_sec) +
+                      (static_cast<double>(usage.ru_utime.tv_usec) / US_PER_SECOND);
+    const auto sys = static_cast<double>(usage.ru_stime.tv_sec) +
+                     (static_cast<double>(usage.ru_stime.tv_usec) / US_PER_SECOND);
+    return user + sys;
 }
 
 // One event-loop thread: its own epoll instance, its own sockets, its own histogram.
 class worker {
-    const config           &cfg_;
-    const sockaddr_in      &addr_;
-    std::barrier<>         &connected_; // released once every socket is up
-    std::barrier<>         &starting_;  // released when the warmup window ends
-    std::barrier<>         &measured_;  // released when every measurement window closed
-    int                     epoll_fd_  = -1;
-    bool                    measuring_ = false;
-    std::vector<connection> conns_;
-    result                  res_;
+    const config           &m_cfg;
+    const sockaddr_in      &m_addr;
+    std::barrier<>         &m_connected; // released once every socket is up
+    std::barrier<>         &m_starting;  // released when the warmup window ends
+    std::barrier<>         &m_measured;  // released when every measurement window closed
+    int                     m_epoll_fd  = -1;
+    bool                    m_measuring = false;
+    std::vector<connection> m_conns;
+    result                  m_res;
 
   public:
     // Binds one worker to the shared phase barriers and the peer address.
     worker(const config &cfg, const sockaddr_in &addr, std::barrier<> &connected,
            std::barrier<> &starting, std::barrier<> &measured)
-        : cfg_{cfg}, addr_{addr}, connected_{connected}, starting_{starting}, measured_{measured} {}
+        : m_cfg{cfg}, m_addr{addr}, m_connected{connected}, m_starting{starting},
+          m_measured{measured} {}
 
     // Connects, warms up, measures, and returns this thread's samples.
     auto run() -> result {
-        epoll_fd_ = ::epoll_create1(EPOLL_CLOEXEC);
-        conns_.resize(cfg_.conns / cfg_.threads);
-        for (auto &c : conns_) {
-            c.fd = connect_to(addr_);
-            c.ring.resize(cfg_.depth);
-            c.out.assign(cfg_.size, 0);
-            c.in.resize(std::max(cfg_.size, RECV_CAP));
+        m_epoll_fd = ::epoll_create1(EPOLL_CLOEXEC);
+        m_conns.resize(m_cfg.conns / m_cfg.threads);
+        for (auto &c : m_conns) {
+            c.fd = connect_to(m_addr);
+            c.ring.resize(m_cfg.depth);
+            c.out.assign(m_cfg.size, 0);
+            c.in.resize(std::max(m_cfg.size, RECV_CAP));
             epoll_event ev{.events = EPOLLIN, .data = {.ptr = &c}};
-            ::epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, c.fd, &ev);
+            ::epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, c.fd, &ev);
             c.armed = EPOLLIN;
             pump(c); // depth messages go out before the first event arrives
         }
 
-        connected_.arrive_and_wait();
-        run_until(now_ns() + cfg_.warmup * NS_PER_SECOND, false);
-        starting_.arrive_and_wait();
-        res_.begin_ns = now_ns();
-        run_until(res_.begin_ns + cfg_.seconds * NS_PER_SECOND, true);
-        res_.end_ns = now_ns();
-        measured_.arrive_and_wait(); // the CPU snapshot must not include the drain
+        m_connected.arrive_and_wait();
+        run_until(now_ns() + (m_cfg.warmup * NS_PER_SECOND), false);
+        m_starting.arrive_and_wait();
+        m_res.begin_ns = now_ns();
+        run_until(m_res.begin_ns + (m_cfg.seconds * NS_PER_SECOND), true);
+        m_res.end_ns = now_ns();
+        m_measured.arrive_and_wait(); // the CPU snapshot must not include the drain
         finish();
 
-        ::close(epoll_fd_);
-        return res_;
+        ::close(m_epoll_fd);
+        return m_res;
     }
 
   private:
     // Drives the epoll loop until the monotonic deadline, recording only while measuring.
     void run_until(std::uint64_t deadline, bool measuring) {
-        measuring_ = measuring;
+        m_measuring = measuring;
         std::array<epoll_event, BATCH> events{};
         for (;;) {
             const auto now = now_ns();
@@ -292,9 +310,11 @@ class worker {
             const auto timeout =
                 std::max<std::int64_t>(1, static_cast<std::int64_t>(deadline - now) / 1'000'000);
             const int ready =
-                ::epoll_wait(epoll_fd_, events.data(), BATCH, static_cast<int>(timeout));
-            for (int i = 0; i < ready; ++i)
-                dispatch(events[i]);
+                ::epoll_wait(m_epoll_fd, events.data(), BATCH, static_cast<int>(timeout));
+            const auto ready_events =
+                std::span{events}.first(static_cast<std::size_t>(std::max(ready, 0)));
+            for (const epoll_event &ev : ready_events)
+                dispatch(ev);
         }
     }
 
@@ -313,17 +333,18 @@ class worker {
 
     // Sends until depth messages are in flight or the socket blocks.
     void pump(connection &c) {
-        while (c.sent - c.echoed < cfg_.depth) {
+        while (c.sent - c.echoed < m_cfg.depth) {
             if (c.out_off == 0) {
                 const std::uint64_t seq = c.sent + 1;
                 std::memcpy(c.out.data(), &seq, sizeof seq);
-                c.ring[seq % cfg_.depth] = now_ns();
+                c.ring[seq % m_cfg.depth] = now_ns();
             }
             const auto n =
-                ::send(c.fd, c.out.data() + c.out_off, cfg_.size - c.out_off, MSG_NOSIGNAL);
+                // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): inside out_buf
+                ::send(c.fd, c.out.data() + c.out_off, m_cfg.size - c.out_off, MSG_NOSIGNAL);
             if (n > 0) {
                 c.out_off += static_cast<std::size_t>(n);
-                if (c.out_off == cfg_.size) {
+                if (c.out_off == m_cfg.size) {
                     c.out_off = 0;
                     ++c.sent;
                 }
@@ -345,6 +366,7 @@ class worker {
     // Reads what is available, frames whole messages, then resumes sending.
     void drain(connection &c) {
         for (;;) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): inside in_buf
             const auto n = ::recv(c.fd, c.in.data() + c.in_len, c.in.size() - c.in_len, 0);
             if (n == 0) {
                 close_conn(c);
@@ -367,11 +389,13 @@ class worker {
     // Cuts the receive buffer into fixed-size messages, then slides the tail down.
     void frame(connection &c) {
         std::size_t off = 0;
-        while (c.in_len - off >= cfg_.size) {
+        while (c.in_len - off >= m_cfg.size) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): inside in_buf
             on_message(c, c.in.data() + off);
-            off += cfg_.size;
+            off += m_cfg.size;
         }
         if (off > 0) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): inside in_buf
             std::memmove(c.in.data(), c.in.data() + off, c.in_len - off);
             c.in_len -= off;
         }
@@ -381,33 +405,34 @@ class worker {
     void on_message(connection &c, const char *msg) {
         std::uint64_t               seq      = 0;
         const std::uint64_t         expected = c.echoed + 1;
-        const std::span<const char> body{msg + 8, cfg_.size - 8};
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): past the seq header
+        const std::span<const char> body{msg + SEQ_BYTES, m_cfg.size - SEQ_BYTES};
         std::memcpy(&seq, msg, sizeof seq);
         if (seq != expected || !std::ranges::all_of(body, [](char b) { return b == 0; })) {
-            if (res_.errors++ == 0)
+            if (m_res.errors++ == 0)
                 std::println(stderr, "echo mismatch: expected seq {}", expected);
-        } else if (measuring_) {
-            const auto latency = now_ns() - c.ring[expected % cfg_.depth];
-            res_.hist.record(latency);
-            res_.max_ns = std::max(res_.max_ns, latency);
-            ++res_.msgs;
+        } else if (m_measuring) {
+            const auto latency = now_ns() - c.ring[expected % m_cfg.depth];
+            m_res.hist.record(latency);
+            m_res.max_ns = std::max(m_res.max_ns, latency);
+            ++m_res.msgs;
         }
         ++c.echoed;
     }
 
     // Changes the epoll interest set only when it actually changes.
-    void arm(connection &c, std::uint32_t mask) {
+    void arm(connection &c, std::uint32_t mask) const {
         if (c.armed == mask)
             return;
         epoll_event ev{.events = mask, .data = {.ptr = &c}};
-        ::epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, c.fd, &ev);
+        ::epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, c.fd, &ev);
         c.armed = mask;
     }
 
     // Half-closes every socket and swallows the echoes still in flight, so the server sees EOF.
     void finish() {
         std::size_t alive = 0;
-        for (auto &c : conns_)
+        for (auto &c : m_conns)
             if (c.fd >= 0) {
                 ::shutdown(c.fd, SHUT_WR);
                 arm(c, EPOLLIN);
@@ -416,18 +441,20 @@ class worker {
         std::array<epoll_event, BATCH> events{};
         const auto                     deadline = now_ns() + FINISH_GRACE_NS;
         while (alive > 0 && now_ns() < deadline) {
-            const int ready = ::epoll_wait(epoll_fd_, events.data(), BATCH, FINISH_POLL_MS);
-            for (int i = 0; i < ready; ++i) {
-                auto &c = *static_cast<connection *>(events[i].data.ptr);
+            const int  ready = ::epoll_wait(m_epoll_fd, events.data(), BATCH, FINISH_POLL_MS);
+            const auto ready_events =
+                std::span{events}.first(static_cast<std::size_t>(std::max(ready, 0)));
+            for (const epoll_event &ev : ready_events) {
+                auto &c = *static_cast<connection *>(ev.data.ptr);
                 if (c.fd < 0 || !at_eof(c))
                     continue;
-                ::epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, c.fd, nullptr);
+                ::epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, c.fd, nullptr);
                 ::close(c.fd);
                 c.fd = -1;
                 --alive;
             }
         }
-        for (auto &c : conns_)
+        for (auto &c : m_conns)
             if (c.fd >= 0)
                 ::close(c.fd);
     }
@@ -443,15 +470,15 @@ class worker {
             if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
                 return false;
             if (n < 0)
-                ++res_.errors; // a real reset, unlike the clean EOF this half-close asked for
+                ++m_res.errors; // a real reset, unlike the clean EOF this half-close asked for
             return true;
         }
     }
 
     // Drops a dead connection; its outstanding echoes will never arrive.
     void close_conn(connection &c) {
-        ++res_.errors;
-        ::epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, c.fd, nullptr);
+        ++m_res.errors;
+        ::epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, c.fd, nullptr);
         ::close(c.fd);
         c.fd = -1;
     }

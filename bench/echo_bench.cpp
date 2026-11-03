@@ -34,10 +34,13 @@ struct options {
 auto parse(int argc, char **argv) -> options {
     options opt;
     for (int i = 1; i < argc; ++i) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): argv is a C array
         const std::string_view arg{argv[i]};
         if (arg == "--port" && i + 1 < argc) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): argv is a C array
             opt.port = static_cast<std::uint16_t>(std::stoi(argv[++i]));
         } else if (arg == "--engines" && i + 1 < argc) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): argv is a C array
             opt.engines = static_cast<unsigned>(std::stoi(argv[++i]));
         } else {
             std::println(stderr, "usage: echo_bench [--port N] [--engines N]");
@@ -93,8 +96,8 @@ task<> echo(int fd) {
             break;
         g_counters.bytes_in.fetch_add(*got);
         for (std::size_t sent = 0; sent < *got;) {
-            const auto out =
-                co_await conn.send(std::string_view{buffer.data() + sent, *got - sent});
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): bounded by *got
+            const auto out = co_await conn.send(std::string_view{buffer.data() + sent, *got - sent});
             if (!out) {
                 g_counters.errors.fetch_add(1);
                 break;

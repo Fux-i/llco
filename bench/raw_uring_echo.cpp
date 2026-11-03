@@ -61,9 +61,12 @@ void usage() {
 
 // Parses one flag value as an unsigned integer; a malformed value is a usage error.
 auto parse_u64(std::string_view text) -> std::uint64_t {
-    std::uint64_t value  = 0;
-    const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
-    if (ec != std::errc{} || end != text.data() + text.size())
+    const char *const first = text.data();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): a [first, last) range
+    const char       *last  = first + text.size();
+    std::uint64_t     value = 0;
+    const auto [end, ec]    = std::from_chars(first, last, value);
+    if (ec != std::errc{} || end != last)
         usage();
     return value;
 }
@@ -72,9 +75,11 @@ auto parse_u64(std::string_view text) -> std::uint64_t {
 auto parse(int argc, char **argv) -> config {
     config cfg;
     for (int i = 1; i < argc; ++i) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): argv is a C array
         const std::string_view arg{argv[i]};
         if (i + 1 >= argc)
             usage();
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): argv is a C array
         const std::string_view value{argv[++i]};
         if (arg == "--port")
             cfg.port = static_cast<std::uint16_t>(parse_u64(value));
@@ -136,34 +141,34 @@ extern "C" void on_signal(int) {
 
 // Single-threaded io_uring echo server: one ring, one eventfd, one op per socket at a time.
 class server {
-    config                             cfg_;
-    statistics                         st_;
-    io_uring                           ring_{};
-    std::vector<std::unique_ptr<conn>> conns_;
-    op                                 accept_op_{.owner = nullptr, .kind = OpKind::Accept};
-    int                                listen_fd_    = -1;
-    int                                event_fd_     = -1;
-    unsigned                           in_flight_    = 0;
-    bool                               accept_armed_ = false;
+    config                             m_cfg;
+    statistics                         m_stats;
+    io_uring                           m_ring{};
+    std::vector<std::unique_ptr<conn>> m_conns;
+    op                                 m_accept_op{.owner = nullptr, .kind = OpKind::Accept};
+    int                                m_listen_fd    = -1;
+    int                                m_event_fd     = -1;
+    unsigned                           m_in_flight    = 0;
+    bool                               m_accept_armed = false;
 
   public:
     // Keeps the configuration; run() opens the ring and the listener.
-    explicit server(config cfg) : cfg_{cfg} {}
+    explicit server(config cfg) : m_cfg{cfg} {}
 
     // Serves until SIGINT or SIGTERM, then cancels every op and reports the counters.
     void run() {
         open_listener();
-        if (::io_uring_queue_init(RING_ENTRIES, &ring_, 0) < 0)
+        if (::io_uring_queue_init(RING_ENTRIES, &m_ring, 0) < 0)
             fail("io_uring_queue_init");
-        event_fd_ = ::eventfd(0, EFD_CLOEXEC);
-        if (event_fd_ < 0)
+        m_event_fd = ::eventfd(0, EFD_CLOEXEC);
+        if (m_event_fd < 0)
             fail("eventfd");
-        if (::io_uring_register_eventfd(&ring_, event_fd_) < 0)
+        if (::io_uring_register_eventfd(&m_ring, m_event_fd) < 0)
             fail("io_uring_register_eventfd");
-        g_event_fd = event_fd_;
+        g_event_fd = m_event_fd;
         install_signals();
 
-        std::println("[listen] 127.0.0.1:{}", cfg_.port);
+        std::println("[listen] 127.0.0.1:{}", m_cfg.port);
         (void)std::fflush(stdout);
         loop();
         stop();
@@ -172,19 +177,19 @@ class server {
   private:
     // Binds 127.0.0.1:port non-blocking and close-on-exec, then starts listening.
     void open_listener() {
-        listen_fd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-        if (listen_fd_ < 0)
+        m_listen_fd = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+        if (m_listen_fd < 0)
             fail("socket");
         const int one = 1;
-        ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        ::setsockopt(m_listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
         const ::sockaddr_in address{.sin_family = AF_INET,
-                                    .sin_port   = htons(cfg_.port),
+                                    .sin_port   = htons(m_cfg.port),
                                     .sin_addr   = {.s_addr = htonl(INADDR_LOOPBACK)},
                                     .sin_zero   = {}};
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): sockaddr_in is a sockaddr
-        if (::bind(listen_fd_, reinterpret_cast<const ::sockaddr *>(&address), sizeof address) < 0)
+        if (::bind(m_listen_fd, reinterpret_cast<const ::sockaddr *>(&address), sizeof address) < 0)
             fail("bind");
-        if (::listen(listen_fd_, SOMAXCONN) < 0)
+        if (::listen(m_listen_fd, SOMAXCONN) < 0)
             fail("listen");
     }
 
@@ -209,42 +214,42 @@ class server {
 
     // Arms the pending accept and every connection that owes the ring an op.
     void drain() {
-        if (!accept_armed_)
+        if (!m_accept_armed)
             arm_accept();
-        for (const auto &c : conns_)
+        for (const auto &c : m_conns)
             arm_ready(*c);
     }
 
     // Blocks until the kernel posts a completion or a signal writes the same eventfd.
     void wait() const {
         std::uint64_t counter{};
-        while (::read(event_fd_, &counter, sizeof counter) < 0 && errno == EINTR) {
+        while (::read(m_event_fd, &counter, sizeof counter) < 0 && errno == EINTR) {
         }
     }
 
     // Hands every queued SQE to the kernel; an empty queue costs no syscall.
     void submit() {
-        if (::io_uring_submit(&ring_) < 0)
+        if (::io_uring_submit(&m_ring) < 0)
             fail("io_uring_submit");
     }
 
     // Takes a submission slot, handing the full batch over first.
     auto next_sqe() -> ::io_uring_sqe * {
-        if (auto *sqe = ::io_uring_get_sqe(&ring_); sqe != nullptr)
+        if (auto *sqe = ::io_uring_get_sqe(&m_ring); sqe != nullptr)
             return sqe;
         submit();
-        return ::io_uring_get_sqe(&ring_);
+        return ::io_uring_get_sqe(&m_ring);
     }
 
     // Reaps the completions already queued; the count lets the loop skip a needless block.
     auto reap() -> unsigned {
         ::io_uring_cqe *cqe  = nullptr;
         unsigned        seen = 0;
-        while (::io_uring_peek_cqe(&ring_, &cqe) == 0) {
+        while (::io_uring_peek_cqe(&m_ring, &cqe) == 0) {
             const int res     = cqe->res;
             auto     *pending = static_cast<op *>(::io_uring_cqe_get_data(cqe));
-            ::io_uring_cqe_seen(&ring_, cqe); // before the handler: it may close the connection
-            --in_flight_;
+            ::io_uring_cqe_seen(&m_ring, cqe); // before the handler: it may close the connection
+            --m_in_flight;
             if (pending != nullptr)
                 complete(*pending, res);
             ++seen;
@@ -269,26 +274,26 @@ class server {
 
     // Takes the new socket, or counts a transient accept error; drain() re-arms the accept.
     void on_accept(int res) {
-        accept_armed_ = false;
+        m_accept_armed = false;
         if (res < 0) {
             if (res != -ECANCELED)
-                ++st_.errors;
+                ++m_stats.errors;
             return;
         }
-        ++st_.accepted;
-        ++st_.live;
-        conns_.push_back(adopt(res));
+        ++m_stats.accepted;
+        ++m_stats.live;
+        m_conns.push_back(adopt(res));
     }
 
     // Echoes what arrived; EOF, a cancel or an error drops the connection.
     void on_recv(conn &c, int res) {
         if (res <= 0) {
             if (res < 0 && res != -ECANCELED)
-                ++st_.errors;
+                ++m_stats.errors;
             close_conn(c);
             return;
         }
-        st_.bytes_in += static_cast<std::uint64_t>(res);
+        m_stats.bytes_in += static_cast<std::uint64_t>(res);
         c.out_off = 0;
         c.out_len = static_cast<std::size_t>(res);
         c.st      = State::SendReady;
@@ -297,22 +302,22 @@ class server {
     // Accounts for the bytes written, then re-arms the tail or the next recv.
     void on_send(conn &c, int res) {
         if (res < 0) {
-            ++st_.errors;
+            ++m_stats.errors;
             close_conn(c);
             return;
         }
         c.out_off += static_cast<std::size_t>(res);
-        st_.bytes_out += static_cast<std::uint64_t>(res);
+        m_stats.bytes_out += static_cast<std::uint64_t>(res);
         c.st = c.out_off < c.out_len ? State::SendReady : State::RecvReady;
     }
 
     // Arms the single pending accept; the new socket is picked up in on_accept().
     void arm_accept() {
         auto *sqe = next_sqe();
-        ::io_uring_prep_accept(sqe, listen_fd_, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
-        ::io_uring_sqe_set_data(sqe, &accept_op_);
-        accept_armed_ = true;
-        ++in_flight_;
+        ::io_uring_prep_accept(sqe, m_listen_fd, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
+        ::io_uring_sqe_set_data(sqe, &m_accept_op);
+        m_accept_armed = true;
+        ++m_in_flight;
     }
 
     // Arms the op a connection owes next: a recv when idle, the un-sent tail while echoing.
@@ -330,18 +335,19 @@ class server {
         ::io_uring_sqe_set_data(sqe, &c.pending);
         c.pending.kind = OpKind::Recv;
         c.st           = State::RecvArmed;
-        ++in_flight_;
+        ++m_in_flight;
     }
 
     // Writes the un-sent tail back; a short send re-arms itself.
     void arm_send(conn &c) {
         auto *sqe = next_sqe();
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): bounded by out_len
         ::io_uring_prep_send(sqe, c.fd, c.buf.data() + c.out_off, c.out_len - c.out_off,
                              MSG_NOSIGNAL);
         ::io_uring_sqe_set_data(sqe, &c.pending);
         c.pending.kind = OpKind::Send;
         c.st           = State::SendArmed;
-        ++in_flight_;
+        ++m_in_flight;
     }
 
     // Cancels every op the kernel still holds on this fd; the cancel's own completion is noise.
@@ -349,50 +355,51 @@ class server {
         auto *sqe = next_sqe();
         ::io_uring_prep_cancel_fd(sqe, fd, 0);
         ::io_uring_sqe_set_data(sqe, nullptr);
-        ++in_flight_;
+        ++m_in_flight;
     }
 
     // Takes a freshly accepted socket: no-delay, chunk buffer, one recv armed next.
     auto adopt(int fd) -> std::unique_ptr<conn> {
         const int one = 1;
         ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-        return std::make_unique<conn>(fd, cfg_.chunk);
+        return std::make_unique<conn>(fd, m_cfg.chunk);
     }
 
     // Half-closes then closes the socket, like echo_bench's conn.shutdown() plus its destructor.
     void close_conn(conn &c) {
         (void)::shutdown(c.fd, SHUT_WR);
         ::close(c.fd);
-        --st_.live;
-        std::erase_if(conns_, [&c](const auto &entry) { return entry.get() == &c; });
+        --m_stats.live;
+        std::erase_if(m_conns, [&c](const auto &entry) { return entry.get() == &c; });
     }
 
     // Cancels the accept and every in-flight echo, drains the kernel, then reports.
     void stop() {
-        if (accept_armed_)
-            arm_cancel(listen_fd_);
-        for (const auto &c : conns_)
+        if (m_accept_armed)
+            arm_cancel(m_listen_fd);
+        for (const auto &c : m_conns)
             if (c->st == State::RecvArmed || c->st == State::SendArmed)
                 arm_cancel(c->fd);
         for (;;) {
             submit();
-            if (in_flight_ == 0)
+            if (m_in_flight == 0)
                 break;
             if (reap() == 0)
                 wait();
         }
-        for (const auto &c : conns_) {
+        for (const auto &c : m_conns) {
             ::close(c->fd);
-            --st_.live;
+            --m_stats.live;
         }
-        conns_.clear();
+        m_conns.clear();
         print_stats();
     }
 
     // Prints echo_bench's stats line and flushes, so a piped log still shows it.
     void print_stats() const {
-        std::println("[stats] accepted={} live={} bytes_in={} bytes_out={} errors={}", st_.accepted,
-                     st_.live, st_.bytes_in, st_.bytes_out, st_.errors);
+        std::println("[stats] accepted={} live={} bytes_in={} bytes_out={} errors={}",
+                     m_stats.accepted, m_stats.live, m_stats.bytes_in, m_stats.bytes_out,
+                     m_stats.errors);
         (void)std::fflush(stdout);
     }
 };

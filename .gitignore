@@ -1,4 +1,5 @@
 build/
+.clice/
 .clangd
 CMakeUserPresets.json
 trace.json

@@ -2,6 +2,7 @@
 
 #include <llco/runtime/scheduler.decl.hpp>
 
+#include <cassert>
 #include <utility>
 
 namespace llco {
@@ -64,6 +65,7 @@ inline auto scheduler::size() -> unsigned {
 inline auto scheduler::engine_at(unsigned index) -> engine & {
     auto &s = instance();
     s.ensure_started();
+    assert(index < s.m_engines.size());
     return *s.m_engines[index];
 }
 

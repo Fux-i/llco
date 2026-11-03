@@ -17,7 +17,7 @@ class scheduler {
   private:
     std::vector<std::unique_ptr<engine>> m_engines;
     std::atomic<unsigned>                m_next{0};
-    bool                                 m_running{false};
+    std::atomic<bool>                    m_running{false};
     std::atomic<bool>                    m_started{false};
     std::once_flag                       m_default_pool;
 

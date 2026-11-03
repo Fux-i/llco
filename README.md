@@ -69,16 +69,15 @@ flowchart LR
 
 运行时微基准（同机 A/B）：单次 `try_add`、跨线程唤醒、`spawn` + 完成、`sync_wait` 往返、`resume_on` 往返。方法见 [docs/bench.md](docs/bench.md)。
 
-网络 echo 对照，裸机 Ryzen 5 PRO 6650U + NixOS 6.18，4 KB 消息，三次中位数：
+网络 echo 对照，裸机 Ryzen 5 PRO 6650U + NixOS 6.18，4 KB 消息、单连接 ping-pong，三次中位数：
 
-| 服务器 | 连接 | 吞吐 | p50 | p99 | 服务端 CPU |
+| 实现 | 吞吐 | p50 | p99 | 服务端 CPU | 系统调用/消息 |
 |---|---|---|---|---|---|
-| 手写 epoll 单线程（对照） | 1 | 46.1 k msg/s | 20.7 µs | 24.0 µs | 31.1% |
-| llco，1 engine | 1 | 43.8 k msg/s | 21.7 µs | 25.9 µs | 41.2% |
-| 手写 epoll 单线程（对照） | 64 | 117.4 k msg/s | 262 µs | 5.28 ms | 60.9% |
-| llco，1 engine | 64 | 116.4 k msg/s | 265 µs | 5.28 ms | 66.7% |
+| 手写 epoll（对照） | 46.0 k msg/s | 20.61 µs | 24.23 µs | 31.0% | 3.00 |
+| raw io_uring（对照，零框架） | 44.1 k msg/s | 21.60 µs | 25.43 µs | 40.6% | 5.00 |
+| llco，1 engine | 43.5 k msg/s | 21.66 µs | 26.96 µs | 41.1% | 5.00 |
 
-单连接下差的是每条消息约 2.2 µs 的框架成本（协程 resume + 入队 + 唤醒检查）；64 连接下两边都撞在 loopback 与系统调用的平台上限，框架差异被淹掉。机器条件、测量方法与五条失真点见 [docs/bench.md](docs/bench.md)，压测代码在 [bench/](bench/)。
+三层对照是为了把账切开：**框架本身几乎免费**（raw io_uring → llco 只差 0.06 µs、0.5 个百分点的 CPU，系统调用数完全相同），贵的是 **io_uring + eventfd 的每消息唤醒**（每消息 5 次系统调用 vs epoll 的 3 次）。64 连接时三种实现都撞在 loopback 平台上限（约 118 k msg/s）；多 engine 不提速。机器条件、归因与五条失真点见 [docs/bench.md](docs/bench.md)。
 
 ## 已知限制
 

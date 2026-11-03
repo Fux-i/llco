@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <coroutine>
+#include <semaphore>
 #include <vector>
 
 using namespace llco;
@@ -114,6 +115,29 @@ TEST(engine, load_tracks_queued_handles) {
     EXPECT_EQ(e.load(), 1U) << "a resumed handle is no longer queued";
     EXPECT_EQ(e.drain(), 1U);
     EXPECT_EQ(e.load(), 0U);
+}
+
+// The stop check runs before the idle mark, so a stop request landing in between never wakes the
+// loop: the callback sees a running loop and writes no eventfd. The loop must not block on it.
+TEST(engine, stop_requested_before_the_loop_blocks_does_not_hang) {
+    engine e;
+
+    std::binary_semaphore in_window{0};
+    std::binary_semaphore stop_requested{0};
+    std::atomic<bool>     once{true};
+
+    e.set_before_idle([&] {
+        if (!once.exchange(false))
+            return;
+        in_window.release();
+        stop_requested.acquire(); // by now request_stop() has returned and notified nobody
+    });
+
+    e.start();
+    in_window.acquire();
+    e.request_stop();
+    stop_requested.release();
+    e.stop(); // blocks forever if the loop went to sleep without rechecking the token
 }
 
 TEST(engine, drain_returns_count) {

@@ -35,6 +35,7 @@ class engine {
     std::optional<io::ring>                 m_ring;
     std::atomic<int>                        m_event_fd{-1};
     std::atomic<bool>                       m_idle{false};
+    std::function<void()>                   m_before_idle; // test hook, runs right before the idle mark
 #if LLCO_TRACE
     std::string m_lane;
 #endif
@@ -52,6 +53,13 @@ class engine {
     // stops the loop thread: it runs what was queued and waits for the ops the kernel still
     // holds before returning
     void stop();
+
+    // asks the loop to return; unlike stop() it does not join
+    void request_stop();
+
+    // test hook: called after the stop check and before the loop marks itself idle, so a test
+    // can land a stop request inside the lost-wakeup window
+    void set_before_idle(std::function<void()> hook);
 
     // loop iterations so far; read it after stop()
     auto loop_count() const noexcept -> std::size_t;

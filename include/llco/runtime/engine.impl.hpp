@@ -59,9 +59,18 @@ inline void engine::start() {
     m_thread = std::jthread{[this](const std::stop_token &token) { loop(token); }};
 }
 
+inline void engine::request_stop() {
+    if (m_thread.joinable())
+        m_thread.request_stop();
+}
+
+inline void engine::set_before_idle(std::function<void()> hook) {
+    m_before_idle = std::move(hook);
+}
+
 inline void engine::stop() {
     if (m_thread.joinable()) {
-        m_thread.request_stop();
+        request_stop();
         m_thread.join(); // the loop runs its own ops out before it returns
         // Tasks pushed after the loop's last look still have to run; their ops are submitted by
         // this thread, which stays alive until they complete.
@@ -145,12 +154,15 @@ inline void engine::loop(const std::stop_token &token) {
         // thread, and it gets them cancelled the moment it exits.
         if (token.stop_requested() && m_queue.empty() && ring().running_io() == 0)
             return;
+        if (m_before_idle)
+            m_before_idle();
         // Mark the loop idle first, then look: a push that landed before this look is still
         // in the queue, and one that lands after it wakes the loop. Reversing these two is a
-        // lost wakeup. The stop token needs the same look, because its callback went through
-        // the idle check too and may have decided not to wake it.
+        // lost wakeup. The stop token needs the same look: its callback went through the idle
+        // check too and may have decided not to wake the loop, which then sleeps forever.
         m_idle = true;
-        if (m_queue.empty() && ring().pending() == 0 && ring().sq_pending() == 0)
+        if (m_queue.empty() && ring().pending() == 0 && ring().sq_pending() == 0 &&
+            !token.stop_requested())
             wait();
         m_idle = false;
     }

@@ -1,0 +1,41 @@
+# CI runs the gcc-14 preset only. clang 22 + libc++ has no official package on
+# GitHub runners, so the four local builds (default/asan/trace/gcc) remain the
+# full gate.
+# CI 只覆盖 gcc-14：clang 22 + libc++ 在 runner 上没有官方包，本机四套构建才是完整门禁
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gcc:
+    name: gcc-14
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Ubuntu 24.04 defaults to GCC 13, whose libstdc++ lacks <print>.
+      # liburing-dev supplies the bare `uring` target linked by the INTERFACE library.
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build g++-14 liburing-dev
+
+      # The FetchContent pins live in CMakeLists.txt, so hashing it drops stale deps.
+      - name: Cache FetchContent
+        uses: actions/cache@v4
+        with:
+          path: build/_gcc/_deps
+          key: fetchcontent-gcc-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        run: cmake --preset gcc
+
+      - name: Build
+        run: cmake --build --preset gcc
+
+      # gtest_discover_tests and bench_smoke carry their own TIMEOUT.
+      - name: Test
+        run: ctest --preset gcc

@@ -66,6 +66,14 @@ _Avoid_: submit, launch, start
 把一个 task 交给 scheduler，由它挑选 engine。
 _Avoid_: dispatch, route
 
+**run_at**:
+把一个 task 钉在指定的 engine 上提交；满载不换 engine，直接失败。
+_Avoid_: run_on, submit_to
+
+**pin**:
+用 `run_at` / `submit_at` 指定唯一目标 engine 的动作，与 `submit` 的轮转相对。
+_Avoid_: bind, assign
+
 **sync_wait**:
 阻塞当前线程直到某个 task 结束，并取回它的结果。
 _Avoid_: block_on, wait_for

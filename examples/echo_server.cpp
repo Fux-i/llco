@@ -24,7 +24,7 @@ task<> echo(int fd) {
 #if LLCO_TRACE
     const trace::async_scope slice{"echo"}; // survives the suspensions, so it needs no nesting
 #endif
-    net::connection         conn{current_engine()->ring(), fd};
+    net::connection         conn{fd};
     std::array<char, CHUNK> buffer{};
     for (;;) {
         const auto bytes = co_await conn.recv(buffer);
@@ -49,7 +49,7 @@ task<> accept_loop(net::listener *listener) {
     }
 }
 
-// Cancels the pending accept; it must run on the listener's engine.
+// Cancels the pending accept; sync_run_at(0, ...) is what puts it on engine 0.
 task<> cancel_accept(net::listener *listener) {
     co_await listener->cancel();
     co_return;
@@ -71,14 +71,14 @@ int main() {
     pthread_sigmask(SIG_BLOCK, &set, nullptr);
 
     scheduler::init(4);
-    net::listener listener{scheduler::engine_at(0).ring(), PORT};
+    net::listener listener{PORT};
     std::println("[listen] 127.0.0.1:{}", listener.port());
-    (void)scheduler::engine_at(0).spawn(accept_loop(&listener));
+    run_at(0, accept_loop(&listener));
 
     int received = 0;
     sigwait(&set, &received);
 
-    (void)scheduler::engine_at(0).spawn(cancel_accept(&listener));
+    sync_run_at(0, cancel_accept(&listener));
     scheduler::stop(); // drains the cancel, then waits for the live connections
 #if LLCO_TRACE
     (void)trace::flush("trace.json");

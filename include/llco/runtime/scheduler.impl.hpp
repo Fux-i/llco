@@ -87,4 +87,19 @@ auto scheduler::submit(task<T> &&t) -> bool {
     return false;
 }
 
+template <class T>
+auto scheduler::submit_at(unsigned index, task<T> &&t) -> bool {
+    auto &s = instance();
+    s.ensure_started();
+    if (!s.m_running) {
+        t.release().destroy();
+        return false;
+    }
+    auto handle = t.release();
+    if (s.m_engines[index]->try_adopt(handle))
+        return true;
+    handle.destroy();
+    return false;
+}
+
 } // namespace llco

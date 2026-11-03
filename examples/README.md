@@ -9,7 +9,7 @@
 | [fanout.cpp](fanout.cpp) | 8 个子任务 fan-out + fan-in | `run`、`latch` | `child` 切片分散到 `engine-0..3`，父任务等 latch |
 | [resume_on.cpp](resume_on.cpp) | 跨 engine 继续执行 | `resume_on` | 同一段 `resume` 从 `engine-0` 换到 `engine-1` |
 | [io_read.cpp](io_read.cpp) | 一次 io_uring read | `io::read`、`current_engine()` | engine 先阻塞，`::write` 之后协程被内核唤醒 |
-| [echo_server.cpp](echo_server.cpp) | TCP 回显，accept 后交给 scheduler | `net::listener`、`net::connection` | `accept` 在 `engine-0`，每条连接的 echo 在别的轨道 |
+| [echo_server.cpp](echo_server.cpp) | TCP 回显，accept 后交给 scheduler | `net::listener`、`net::connection`、`run_at` | `accept` 在 `engine-0`，每条连接的 echo 在别的轨道 |
 | [trace.cpp](trace.cpp) | 给自己的代码加切片 | `trace::scope` | `pipeline/load/compute` 嵌在 engine 的 `resume` 里 |
 
 ## 构建与运行

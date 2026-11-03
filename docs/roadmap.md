@@ -533,8 +533,9 @@ $ ./build/bin/echo_server
 - `llco::run(tasks...)`（当时叫 `scheduler::run`，ADR-0010 之后搬到自由函数）：一次提交任意多个 `task<T>`，第一个装不下就抛 `std::runtime_error`（已接受的任务继续跑；被拒的帧按 ADR-0004 销毁，不回滚）。
 - `io::recv` / `io::send` 加了 `std::span<char>` 与 `std::string_view` 重载，调用点不再写 `std::as_writable_bytes(...)`。
 - `net::connection` / `net::listener`：把 `ring` 和 fd 收进对象，`co_await conn.recv(buffer)` / `co_await listener.accept()`（结果直接是 `connection`）；fd 由析构关闭，`listener.cancel()` 负责打断 pending accept。`echo_server` 从 105 行降到 96 行，回显循环里不再出现 `ring()`。
+- `llco::run_at` / `sync_run_at`（ADR-0012）：把任务钉在一个 engine 上，替掉 `scheduler::engine_at(i).spawn(t)`——后者满载时销毁帧返回 `false`，示例里的 `(void)` 等于"没放上去也不吭声"。配套新增 `scheduler::submit_at`（不沿环重试）、`net::listener{port}`（内部取 engine 0 的 ring）与 `net::connection{fd}`（取当前 engine 的 ring），示例的 `main` 与回显循环里不再出现 `engine`。
 - 不动的：`io::` 层的显式 `ring&` 契约、ADR-0006 的分发路径、`stop()` 语义、`llco.hpp` 聚合头文件（io/net 仍不进聚合头文件）。
-- 四套构建现在：default 80、asan 80、trace 82、gcc 80（M12 完成时是 66/66/68/66；这轮加了 3 条用例，ADR-0010 加了 4 条，ADR-0011 又加了 5 条）。
+- 四套构建现在：default 85、asan 85、trace 90、gcc 85（trace 多出 5 条，是 `LLCO_TRACE=ON` 才编进去的引擎埋点用例）。
 
 ---
 

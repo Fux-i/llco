@@ -1,6 +1,7 @@
 #pragma once
 
 #include <llco/io/op.decl.hpp>
+#include <llco/runtime/scheduler.decl.hpp>
 
 #include <coroutine>
 #include <cstdint>
@@ -32,6 +33,8 @@ class connection {
     int       m_fd;
 
   public:
+    // Takes the socket over on the engine running this thread; not for a caller thread.
+    explicit connection(int fd) noexcept;
     connection(io::ring &ring, int fd) noexcept;
     connection(connection &&other) noexcept;
     ~connection();
@@ -74,7 +77,10 @@ class listener {
     int       m_fd;
 
   public:
-    // Binds 127.0.0.1:port (0 asks the kernel) and listens.
+    // Binds 127.0.0.1:port (0 asks the kernel) on engine 0, where accept and cancel must run.
+    explicit listener(std::uint16_t port = 0);
+
+    // Binds on a specific ring, for a manual engine or a listener outside the pool.
     explicit listener(io::ring &ring, std::uint16_t port = 0);
     ~listener();
     CLASS_NO_COPY_MOVE(listener);

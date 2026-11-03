@@ -1,5 +1,7 @@
 # scheduler 是进程内单例
 
+> 修订（ADR-0012）：公开面另有 `submit_at(index, task)`，配合自由函数 `run_at` / `sync_run_at` 把放置钉在一个 engine 上。
+
 推翻 [ADR-0002](0002-scheduler-is-an-instance.md)。scheduler 不再由使用者构造，而是进程内唯一的懒构造单例，公开面全是静态函数：`init(n)` / `submit` / `stop` / `size` / `engine_at`，外加两个自由函数入口 `llco::run(...)` / `llco::sync_run(...)`。
 
 理由只有一条：**"提交"需要一个固定的落点，而把它当参数传下去，会把调度拓扑写进每个协程的签名。** M13 之后，`echo` / `accept_loop` / `stop_accept` / `parent` 全都带一个 `scheduler *s`，只为了 `s->submit` 和 `s->engine_at(0)`。

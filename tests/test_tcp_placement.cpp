@@ -1,15 +1,13 @@
 #include <gtest/gtest.h>
-#include <llco/core/resume_on.hpp>
 #include <llco/core/task.hpp>
 #include <llco/io/op.decl.hpp>
 #include <llco/io/ring.decl.hpp>
 #include <llco/net/socket.decl.hpp>
+#include <llco/runtime/run.decl.hpp>
 #include <llco/runtime/scheduler.decl.hpp>
-#include <llco/sync/sync_wait.hpp>
 
 #include <array>
 #include <atomic>
-#include <cerrno>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -45,7 +43,7 @@ task<> echo_counted(int fd, std::vector<std::atomic<unsigned>> *landed) {
     for (unsigned i = 0; i < scheduler::size(); ++i)
         if (&scheduler::engine_at(i) == current_engine())
             (*landed)[i].fetch_add(1);
-    net::connection         conn{current_engine()->ring(), fd};
+    net::connection         conn{fd};
     std::array<char, CHUNK> buffer{};
     const auto              got = co_await conn.recv(buffer);
     if (!got)
@@ -70,9 +68,8 @@ task<> accept_loop(net::listener *listener, std::atomic<bool> *stop,
     }
 }
 
-// The cancel has to be submitted by the listener ring's owner thread.
+// Cancels the pending accept; sync_run_at(0, ...) puts it on the listener's engine.
 task<> stop_accept(net::listener *listener) {
-    co_await resume_on(scheduler::engine_at(0));
     (void)co_await listener->cancel();
 }
 
@@ -80,7 +77,7 @@ task<> stop_accept(net::listener *listener) {
 // tasks take consecutive placement slots.
 task<> drive_clients(std::uint16_t port, unsigned count, std::atomic<unsigned> *echoed) {
     for (unsigned i = 0; i < count; ++i) {
-        net::connection conn{current_engine()->ring(), net::tcp_socket()};
+        net::connection conn{net::tcp_socket()};
         const auto      connected =
             co_await io::connect(current_engine()->ring(), conn.fd(), net::loopback(port));
         EXPECT_TRUE(connected) << connected.error().message();
@@ -98,19 +95,19 @@ task<> drive_clients(std::uint16_t port, unsigned count, std::atomic<unsigned> *
 
 TEST(tcp, scheduler_places_connections_round_robin) {
     scheduler::init(ENGINES);
-    net::listener                      listener{scheduler::engine_at(0).ring(), 0};
+    net::listener                      listener{0};
     std::vector<std::atomic<unsigned>> landed(ENGINES);
     std::atomic<bool>                  stop{false};
     std::atomic<unsigned>              echoed{0};
 
-    ASSERT_TRUE(scheduler::engine_at(0).spawn(accept_loop(&listener, &stop, &landed)));
+    run_at(0, accept_loop(&listener, &stop, &landed));
     ASSERT_TRUE(scheduler::submit(drive_clients(listener.port(), ENGINES, &echoed)));
 
     ASSERT_TRUE(wait_until([&] { return echoed.load() == ENGINES; }))
         << "the echoes never came back";
 
     stop.store(true);
-    sync_wait(stop_accept(&listener));
+    sync_run_at(0, stop_accept(&listener));
     scheduler::stop();
 
     for (unsigned i = 0; i < ENGINES; ++i)
@@ -119,16 +116,16 @@ TEST(tcp, scheduler_places_connections_round_robin) {
 
 TEST(tcp, stop_cancels_the_pending_accept) {
     scheduler::init(2);
-    net::listener                      listener{scheduler::engine_at(0).ring(), 0};
+    net::listener                      listener{0};
     std::vector<std::atomic<unsigned>> landed(2);
     std::atomic<bool>                  stop{false};
 
-    ASSERT_TRUE(scheduler::engine_at(0).spawn(accept_loop(&listener, &stop, &landed)));
+    run_at(0, accept_loop(&listener, &stop, &landed));
     ASSERT_TRUE(wait_until([&] { return scheduler::engine_at(0).ring().running_io() == 1; }))
         << "the accept never armed";
 
     stop.store(true);
-    sync_wait(stop_accept(&listener));
+    sync_run_at(0, stop_accept(&listener));
 
     const auto begin = std::chrono::steady_clock::now();
     scheduler::stop();

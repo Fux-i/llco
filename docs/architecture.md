@@ -23,7 +23,7 @@ llco 是一个 C++23 协程编排框架：**task** 负责"怎么写"，**engine*
 
 ```mermaid
 flowchart TB
-  U["用户代码<br/>task&lt;T&gt; + co_await"] -->|"run / sync_run / submit / sync_wait"| S["scheduler 单例<br/>N 个 engine + 轮转放置"]
+  U["用户代码<br/>task&lt;T&gt; + co_await"] -->|"run / run_at / sync_run / submit / sync_wait"| S["scheduler 单例<br/>N 个 engine + 轮转放置"]
   S -->|"try_add(handle)"| E["engine（单线程执行上下文）"]
   E --> Q["queue<br/>atomic_queue2 适配层"]
   E --> R["io_uring<br/>每 engine 一个，仅本线程使用"]
@@ -59,7 +59,7 @@ concept Executor = requires(E& e, std::coroutine_handle<> h) {
 
 ## 一次任务的生命周期
 
-1. 用户写 `task<T>`（惰性，未开始）。`main` 通过 `scheduler::submit(std::move(t))`、`llco::run(...)` 或 `engine.spawn(std::move(t))` 交出所有权；或者在自己的协程里 `co_await` 一个子任务。
+1. 用户写 `task<T>`（惰性，未开始）。`main` 通过 `scheduler::submit(std::move(t))`、`llco::run(...)`、`llco::run_at(i, ...)`（钉在 engine i 上，ADR-0012）或 `engine.spawn(std::move(t))` 交出所有权；或者在自己的协程里 `co_await` 一个子任务。
 2. 提交：`task::release()` 交出句柄 → 句柄进目标 engine 的队列 → 写 eventfd 唤醒 → 返回。
 3. engine 线程取出句柄 → `resume()` → 协程跑到第一个真正的挂起点。
 4. 协程里 `co_await` 子任务：**inline symmetric transfer**，同一个线程直接跑子协程，不入队（ADR-0001）。
@@ -101,6 +101,7 @@ M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `r
 ## scheduler：轮转放置与满载重试
 
 - `scheduler::submit(task<T>&&)`：`release()` → 从游标起点沿环扫一圈 `try_adopt` → 有 engine 接受就返回 true；整圈都满、或 scheduler 已经 `stop()`，则 `destroy()` 帧并返回 false。放置只给起点，能不能落地由 `try_adopt` 决定（ADR-0005）。
+- `scheduler::submit_at(index, task<T>&&)`：只试指定那个 engine，满载也不换——`submit` 与它的差别就这一条（ADR-0012）。`llco::run_at` / `sync_run_at` 是它的公开入口，失败与 `run` 家族一样抛 `std::runtime_error`。
 - `llco::run(tasks...)` 是便利入口：任意多个 `task<T>` 一次提交，第一个装不下就抛 `std::runtime_error`（已接受的任务继续跑；被拒的帧按 ADR-0004 销毁，不回滚）。`sync_run(tasks...)` 提交后阻塞到这批任务全部结束，返回值与异常都不收集。
 - 单例与重建：`init(n)` 每次都换一套 engine（同 n 也重建），这是测试之间的归零点；`stop()` 保留 engine 对象，所以 `loop_count()` / `running_io()` 在关停后仍可读（ADR-0010）。
 - 满载重试**不用** `spawn`：`spawn` 失败即销毁帧，任务会丢失；`try_adopt` 失败时所有权仍在调用方，同一个句柄可以继续试下一个 engine（ADR-0004 已按此订正）。
@@ -140,11 +141,11 @@ const int winner = co_await first->wait();
 - **关停**：`stop()` 要等 `running_io() == 0`，而监听 fd 上的 pending accept 永远等不到——`io::cancel(ring, fd)` 把它打断成 `-ECANCELED`；cancel 自己返回 `0`，没有可取消的 op 时 `-ENOENT`（映射成 `false`，不是异常）。demo 的收尾是：信号 → `sync_wait` 一个先 `resume_on` 到 engine 的 cancel 任务 → `stop()` → `close(listener)`。
 - **fd 契约**：listener 与 accepted fd 都是非阻塞 + close-on-exec；关掉之前该 fd 上不能有未完成 op。IPv4 only（`connect` 收 `sockaddr_in`）。
 - **错误语义**：内核返回值可能是负数的稳态操作（read/write/recv/send/accept/connect/cancel）一律返回 `std::expected<T, std::error_code>`，不抛；只有启动期与不变量失败才抛，未捕获即终止（ADR-0009）。
-- **两个轻量封装**：`net::connection{ring, fd}` / `net::listener{ring, port}` 只是把 `ring` 和 fd 收进对象——成员函数直接返回 awaiter（`conn.recv(buf)`、`conn.send(view)`），`listener.accept()` 的 `await_resume` 是 `expected<connection, error_code>`，`listener.cancel()` 就是收尾那一发取消。fd 由析构关闭，`connection` 可 move（源置 -1），所以"把连接 move 进 `spawn` 的帧、帧被销毁时关 fd"是自动的。
+- **两个轻量封装**：`net::connection{fd}` / `net::listener{port}` 把当前 engine 的 ring 和 fd 收进对象，`{ring, fd}` / `{ring, port}` 留给 manual engine、caller 线程与非默认归属（ADR-0012）——成员函数直接返回 awaiter（`conn.recv(buf)`、`conn.send(view)`），`listener.accept()` 的 `await_resume` 是 `expected<connection, error_code>`，`listener.cancel()` 就是收尾那一发取消。fd 由析构关闭，`connection` 可 move（源置 -1），所以"把连接 move 进 `spawn` 的帧、帧被销毁时关 fd"是自动的。
 
 ### M13：连接由 scheduler 放置
 
-一个 listener 在 engine 0 上，acceptor 用 `listener.accept_fd()` 拿原始 fd，`scheduler::submit(serve(fd))` 轮转放置；`serve` 在目标 engine 上首次执行（`current_engine()->ring()`），此后绑定。不使用 `SO_REUSEPORT`（ADR-0008）。
+一个 listener 在 engine 0 上，acceptor 用 `listener.accept_fd()` 拿原始 fd，`scheduler::submit(serve(fd))` 轮转放置；`serve` 在目标 engine 上首次执行（`net::connection{fd}` 取当前 engine 的 ring），此后绑定。listener 的归属与 acceptor 的放置都不需要 engine 对象：`net::listener{port}` 内部取 engine 0 的 ring，`run_at(0, ...)` / `sync_run_at(0, ...)` 负责放置（ADR-0012）。不使用 `SO_REUSEPORT`（ADR-0008）。
 
 代价与边界：acceptor 单线程且与 engine 0 共用线程；每条连接一次跨线程入队 + 唤醒；队列满按 ADR-0004 丢连接并关 fd。关停仍只 cancel listener，而仍打开的连接（idle recv）会让 `stop()` 等到它们结束。trace 里 accept 与 echo 分属两条线程轨道。
 

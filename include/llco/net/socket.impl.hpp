@@ -53,6 +53,8 @@ inline auto listen_tcp(std::uint16_t port) -> int {
     return fd;
 }
 
+inline connection::connection(int fd) noexcept : m_ring{&current_engine()->ring()}, m_fd{fd} {}
+
 inline connection::connection(io::ring &ring, int fd) noexcept : m_ring{&ring}, m_fd{fd} {}
 
 inline connection::connection(connection &&other) noexcept
@@ -105,6 +107,9 @@ inline auto listener::accepting::await_resume() -> std::expected<connection, std
         return std::unexpected{fd.error()};
     return connection{*m_ring, *fd};
 }
+
+inline listener::listener(std::uint16_t port)
+    : m_ring{&scheduler::engine_at(0).ring()}, m_fd{listen_tcp(port)} {}
 
 inline listener::listener(io::ring &ring, std::uint16_t port) : m_ring{&ring}, m_fd{listen_tcp(port)} {}
 

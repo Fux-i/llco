@@ -70,6 +70,24 @@ void run(R &&tasks) {
 }
 
 template <class... T>
+void run_at(unsigned index, task<T> &&...tasks) {
+    if (!(scheduler::submit_at(index, std::move(tasks)) && ...))
+        throw std::runtime_error{"scheduler is full"};
+}
+
+template <TaskMaker F>
+void run_at(unsigned index, F &&make) {
+    run_at(index, detail::invoked<std::decay_t<F>>(std::forward<F>(make)));
+}
+
+template <TaskBatch R>
+void run_at(unsigned index, R &&tasks) {
+    for (auto &t : std::forward<R>(tasks))
+        if (!scheduler::submit_at(index, std::move(t)))
+            throw std::runtime_error{"scheduler is full"};
+}
+
+template <class... T>
 void sync_run(task<T> &&...tasks) {
     detail::batch done{static_cast<unsigned>(sizeof...(T))};
     bool          all        = true;
@@ -96,6 +114,42 @@ void sync_run(R &&tasks) {
     bool          all = true;
     for (auto &t : std::forward<R>(tasks)) {
         if (scheduler::submit(detail::counted(&t, &done)))
+            continue;
+        all = false;
+        done.count_down();
+    }
+    done.wait();
+    if (!all)
+        throw std::runtime_error{"scheduler is full"};
+}
+
+template <class... T>
+void sync_run_at(unsigned index, task<T> &&...tasks) {
+    detail::batch done{static_cast<unsigned>(sizeof...(T))};
+    bool          all        = true;
+    auto          submit_one = [&done, &all, index](auto &t) {
+        if (scheduler::submit_at(index, detail::counted(&t, &done)))
+            return;
+        all = false;
+        done.count_down();
+    };
+    (submit_one(tasks), ...);
+    done.wait();
+    if (!all)
+        throw std::runtime_error{"scheduler is full"};
+}
+
+template <TaskMaker F>
+void sync_run_at(unsigned index, F &&make) {
+    sync_run_at(index, detail::invoked<std::decay_t<F>>(std::forward<F>(make)));
+}
+
+template <SizedTaskBatch R>
+void sync_run_at(unsigned index, R &&tasks) {
+    detail::batch done{static_cast<unsigned>(std::ranges::size(tasks))};
+    bool          all = true;
+    for (auto &t : std::forward<R>(tasks)) {
+        if (scheduler::submit_at(index, detail::counted(&t, &done)))
             continue;
         all = false;
         done.count_down();

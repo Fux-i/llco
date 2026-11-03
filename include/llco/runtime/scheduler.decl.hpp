@@ -51,6 +51,12 @@ class scheduler {
     template <class T>
     [[LLCO_DISCARD_HINT]]
     static auto submit(task<T> &&t) -> bool;
+
+    // pins the frame to one engine, without the round-robin lap; false when stopped or that
+    // engine is full, so index must be below size()
+    template <class T>
+    [[LLCO_DISCARD_HINT]]
+    static auto submit_at(unsigned index, task<T> &&t) -> bool;
 };
 
 } // namespace llco

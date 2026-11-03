@@ -28,6 +28,19 @@ inline auto engine_slot() noexcept -> engine *& {
     return slot;
 }
 
+// Gives the calling thread an engine slot for the duration of a scope.
+class slot_guard {
+  private:
+    engine *m_previous;
+
+  public:
+    explicit slot_guard(engine *current) noexcept : m_previous{engine_slot()} {
+        engine_slot() = current;
+    }
+    ~slot_guard() { engine_slot() = m_previous; }
+    CLASS_NO_COPY_MOVE(slot_guard);
+};
+
 } // namespace detail
 
 inline auto current_engine() noexcept -> engine * {
@@ -73,7 +86,9 @@ inline void engine::stop() {
         request_stop();
         m_thread.join(); // the loop runs its own ops out before it returns
         // Tasks pushed after the loop's last look still have to run; their ops are submitted by
-        // this thread, which stays alive until they complete.
+        // this thread, which stays alive until they complete. They reach current_engine() too, so
+        // the drain runs with the slot the loop thread used to hold.
+        const detail::slot_guard slot{this};
         for (;;) {
             (void)drain();
             ring().submit();

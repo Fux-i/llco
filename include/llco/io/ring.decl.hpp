@@ -57,7 +57,7 @@ class ring {
     // Completions reaped so far; readable from any thread.
     auto completions() const noexcept -> std::size_t;
 
-    // Ops armed but not completed yet, submitted or not; readable from any thread.
+    // Ops outstanding: prepared or submitted, not completed yet; readable from any thread.
     auto running_io() const noexcept -> unsigned;
 
     friend class completion;
@@ -70,7 +70,7 @@ class completion {
     int                     m_result{};
 
     // Counts the op on its ring and remembers the frame; reap() does the reverse.
-    void armed(ring &owner, std::coroutine_handle<> caller) noexcept;
+    void track(ring &owner, std::coroutine_handle<> caller) noexcept;
 
     friend class ring;
 };

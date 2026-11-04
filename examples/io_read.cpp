@@ -44,7 +44,7 @@ int main() {
     std::array<char, PAYLOAD.size()> buffer{};
     std::binary_semaphore            done{0};
 
-    run(read_once(fds[0], buffer, &done));    // arms the read on engine 0
+    run(read_once(fds[0], buffer, &done));    // prepares the read on engine 0
     std::this_thread::sleep_for(WRITE_DELAY); // the engine is parked in read(eventfd) by now
     [[maybe_unused]]
     const auto written = ::write(fds[1], PAYLOAD.data(), PAYLOAD.size()); // needs data

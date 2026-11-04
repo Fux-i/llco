@@ -18,13 +18,13 @@ M12 在 io 层加了 `accept` / `connect` / `send` / `recv` / `cancel` 五个 op
 
 - `accept(NULL, NULL)` 合法（实测 `res=6`），所以 `accept` 只返回新 fd；要 peer 地址就 `getpeername`，不把 `sockaddr_storage` 放进 awaiter。`prep_accept` 的 flags 只作用于新 socket（`SOCK_NONBLOCK | SOCK_CLOEXEC`），不影响 accept 这个调用本身。
 - `connect` 的 `sockaddr_in` 在**提交时**被内核拷走（把地址 `mprotect` 掉的探针仍然连上），而提交延迟在循环里，所以地址只需活到协程挂起期间；awaiter 存指针，注释写清契约。成功 `res=0`，失败 `-ECONNREFUSED`（-111）。
-- 这几个 op 与读写共用同一条提交路径：awaiter 只填 SQE、`set_data(completion *)`、`armed()`，循环 `drain → submit → reap`；`reap()` 对任何 awaiter 都只做"写 result、`running_io--`、resume"三件事。
+- 这几个 op 与读写共用同一条提交路径：awaiter 只填 SQE、`set_data(completion *)`、`track()`，循环 `drain → submit → reap`；`reap()` 对任何 awaiter 都只做"写 result、`running_io--`、resume"三件事。
 
 ## 3. 关停：cancel 是 stop() 能返回的前提
 
 M11 把 `stop()` 定义成"等到 `running_io() == 0`"。监听 fd 上的 pending accept 永远等不到，服务器会卡在 `stop()` 里。`io::cancel(ring, fd)`（`IORING_OP_ASYNC_CANCEL` + `IORING_ASYNC_CANCEL_FD`）解决它：cancel 自己的 CQE 是 `0`，被打断的 accept 是 `-ECANCELED`，两个 CQE 都要 reap（cancel 先到）；没有可取消的 op 时 cancel 返回 `-ENOENT`，映射成 `await_resume() == false` 而不是异常——"取消时连接刚好进来"是正常竞态。
 
-demo 因此可以跑到 SIGINT：主线程 `sync_wait` 一个开头 `co_await resume_on(engine)` 的任务（cancel 必须在 ring 属主线程提交），再 `stop()`、`close(listener)`。accept 循环收到 `ECANCELED` 后 `co_return`，并且在每轮末尾看一眼中断标志——连接恰好落在信号与 cancel 之间时它自己退出，不会留下"再 arm 一个没人能打断的 accept"。
+demo 因此可以跑到 SIGINT：主线程 `sync_wait` 一个开头 `co_await resume_on(engine)` 的任务（cancel 必须在 ring 属主线程提交），再 `stop()`、`close(listener)`。accept 循环收到 `ECANCELED` 后 `co_return`，并且在每轮末尾看一眼中断标志——连接恰好落在信号与 cancel 之间时它自己退出，不会留下"再提交一个没人能打断的 accept"。
 
 ## Considered Options
 

@@ -94,9 +94,9 @@ auto parse(int argc, char **argv) -> config {
 // Where a connection stands: the op it has in flight, or the one it owes next.
 enum class State : std::uint8_t {
     RecvReady,
-    RecvArmed,
+    RecvInFlight,
     SendReady,
-    SendArmed
+    SendInFlight
 };
 
 // What a completion belongs to; the tag is the io_uring user_data of one submission.
@@ -116,7 +116,7 @@ struct op {
 
 // One accepted socket, its echo buffer, and the tag of the single op it may have in flight.
 struct conn {
-    op                pending; // rewritten on every arm
+    op                pending; // rewritten on every prepare
     int               fd      = -1;
     State             st      = State::RecvReady;
     std::size_t       out_off = 0; // bytes of buf already sent
@@ -146,10 +146,10 @@ class server {
     io_uring                           m_ring{};
     std::vector<std::unique_ptr<conn>> m_conns;
     op                                 m_accept_op{.owner = nullptr, .kind = OpKind::Accept};
-    int                                m_listen_fd    = -1;
-    int                                m_event_fd     = -1;
-    unsigned                           m_in_flight    = 0;
-    bool                               m_accept_armed = false;
+    int                                m_listen_fd      = -1;
+    int                                m_event_fd       = -1;
+    unsigned                           m_in_flight      = 0;
+    bool                               m_accept_pending = false;
 
   public:
     // Keeps the configuration; run() opens the ring and the listener.
@@ -202,7 +202,7 @@ class server {
         ::sigaction(SIGTERM, &action, nullptr);
     }
 
-    // Arms every ready op, submits, reaps; only wait() blocks, and only on an empty CQ.
+    // Prepares every ready op, submits, reaps; only wait() blocks, and only on an empty CQ.
     void loop() {
         while (g_stopped == 0) {
             drain();
@@ -212,12 +212,12 @@ class server {
         }
     }
 
-    // Arms the pending accept and every connection that owes the ring an op.
+    // Prepares the pending accept and every connection that owes the ring an op.
     void drain() {
-        if (!m_accept_armed)
-            arm_accept();
+        if (!m_accept_pending)
+            prepare_accept();
         for (const auto &c : m_conns)
-            arm_ready(*c);
+            prepare_ready(*c);
     }
 
     // Blocks until the kernel posts a completion or a signal writes the same eventfd.
@@ -272,9 +272,9 @@ class server {
         }
     }
 
-    // Takes the new socket, or counts a transient accept error; drain() re-arms the accept.
+    // Takes the new socket, or counts a transient accept error; drain() prepares the next accept.
     void on_accept(int res) {
-        m_accept_armed = false;
+        m_accept_pending = false;
         if (res < 0) {
             if (res != -ECANCELED)
                 ++m_stats.errors;
@@ -299,7 +299,7 @@ class server {
         c.st      = State::SendReady;
     }
 
-    // Accounts for the bytes written, then re-arms the tail or the next recv.
+    // Accounts for the bytes written, then prepares the next send or recv.
     void on_send(conn &c, int res) {
         if (res < 0) {
             ++m_stats.errors;
@@ -311,54 +311,54 @@ class server {
         c.st = c.out_off < c.out_len ? State::SendReady : State::RecvReady;
     }
 
-    // Arms the single pending accept; the new socket is picked up in on_accept().
-    void arm_accept() {
+    // Prepares the single pending accept; the new socket is picked up in on_accept().
+    void prepare_accept() {
         auto *sqe = next_sqe();
         ::io_uring_prep_accept(sqe, m_listen_fd, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
         ::io_uring_sqe_set_data(sqe, &m_accept_op);
-        m_accept_armed = true;
+        m_accept_pending = true;
         ++m_in_flight;
     }
 
-    // Arms the op a connection owes next: a recv when idle, the un-sent tail while echoing.
-    void arm_ready(conn &c) {
+    // Prepares the op a connection owes next: a recv when idle, the un-sent tail while echoing.
+    void prepare_ready(conn &c) {
         if (c.st == State::RecvReady)
-            arm_recv(c);
+            prepare_recv(c);
         else if (c.st == State::SendReady)
-            arm_send(c);
+            prepare_send(c);
     }
 
     // Waits for the peer to send more; its buffer lives until the completion is reaped.
-    void arm_recv(conn &c) {
+    void prepare_recv(conn &c) {
         auto *sqe = next_sqe();
         ::io_uring_prep_recv(sqe, c.fd, c.buf.data(), c.buf.size(), 0);
         ::io_uring_sqe_set_data(sqe, &c.pending);
         c.pending.kind = OpKind::Recv;
-        c.st           = State::RecvArmed;
+        c.st           = State::RecvInFlight;
         ++m_in_flight;
     }
 
-    // Writes the un-sent tail back; a short send re-arms itself.
-    void arm_send(conn &c) {
+    // Writes the un-sent tail back; a short send prepares the next one.
+    void prepare_send(conn &c) {
         auto *sqe = next_sqe();
         // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): bounded by out_len
         ::io_uring_prep_send(sqe, c.fd, c.buf.data() + c.out_off, c.out_len - c.out_off,
                              MSG_NOSIGNAL);
         ::io_uring_sqe_set_data(sqe, &c.pending);
         c.pending.kind = OpKind::Send;
-        c.st           = State::SendArmed;
+        c.st           = State::SendInFlight;
         ++m_in_flight;
     }
 
     // Cancels every op the kernel still holds on this fd; the cancel's own completion is noise.
-    void arm_cancel(int fd) {
+    void prepare_cancel(int fd) {
         auto *sqe = next_sqe();
         ::io_uring_prep_cancel_fd(sqe, fd, 0);
         ::io_uring_sqe_set_data(sqe, nullptr);
         ++m_in_flight;
     }
 
-    // Takes a freshly accepted socket: no-delay, chunk buffer, one recv armed next.
+    // Takes a freshly accepted socket: no-delay, chunk buffer, one recv prepared next.
     auto adopt(int fd) -> std::unique_ptr<conn> {
         const int one = 1;
         ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
@@ -375,11 +375,11 @@ class server {
 
     // Cancels the accept and every in-flight echo, drains the kernel, then reports.
     void stop() {
-        if (m_accept_armed)
-            arm_cancel(m_listen_fd);
+        if (m_accept_pending)
+            prepare_cancel(m_listen_fd);
         for (const auto &c : m_conns)
-            if (c->st == State::RecvArmed || c->st == State::SendArmed)
-                arm_cancel(c->fd);
+            if (c->st == State::RecvInFlight || c->st == State::SendInFlight)
+                prepare_cancel(c->fd);
         for (;;) {
             submit();
             if (m_in_flight == 0)

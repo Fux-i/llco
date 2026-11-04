@@ -64,16 +64,16 @@ task<> posting_setter(event<> *e, std::atomic<bool> *setter_returned) {
 
 task<> thread_waiter(event<int> *e, std::atomic<std::thread::id> *before,
                      std::atomic<std::thread::id> *after, std::atomic<int> *value,
-                     std::atomic<bool> *armed) {
+                     std::atomic<bool> *ready) {
     before->store(std::this_thread::get_id());
-    armed->store(true);
+    ready->store(true);
     *value = co_await e->wait();
     after->store(std::this_thread::get_id());
     co_return;
 }
 
-task<> thread_setter(event<int> *e, std::atomic<bool> *armed, std::atomic<bool> *done) {
-    while (!armed->load())
+task<> thread_setter(event<int> *e, std::atomic<bool> *ready, std::atomic<bool> *done) {
+    while (!ready->load())
         std::this_thread::yield();
     std::this_thread::sleep_for(1ms); // give the waiter time to publish
     e->set(CROSS_ENGINE_VALUE);
@@ -173,11 +173,11 @@ TEST(event, wakes_a_waiter_on_its_own_engine) {
     std::atomic<std::thread::id> before{};
     std::atomic<std::thread::id> after{};
     std::atomic<int>             value{0};
-    std::atomic<bool>            armed{false};
+    std::atomic<bool>            ready{false};
     std::atomic<bool>            done{false};
 
-    ASSERT_TRUE(scheduler::engine_at(0).spawn(thread_waiter(&ev, &before, &after, &value, &armed)));
-    ASSERT_TRUE(scheduler::engine_at(1).spawn(thread_setter(&ev, &armed, &done)));
+    ASSERT_TRUE(scheduler::engine_at(0).spawn(thread_waiter(&ev, &before, &after, &value, &ready)));
+    ASSERT_TRUE(scheduler::engine_at(1).spawn(thread_setter(&ev, &ready, &done)));
 
     while (!done.load())
         std::this_thread::sleep_for(POLL);

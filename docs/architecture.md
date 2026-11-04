@@ -75,7 +75,7 @@ concept Executor = requires(E& e, std::coroutine_handle<> h) {
 
 ### 2. 阻塞点：每 engine 一个 ring + 一个共享 eventfd
 
-M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `read(eventfd)` 上，`try_add` / `spawn` 成功后写这个 fd 把线程唤醒。M6 起每个 engine 建一个 io_uring 实例（只建一次、跨 `start`/`stop` 复用、只由本线程使用），用**普通** `io_uring_register_eventfd` 把该 engine 的 eventfd 绑进 ring，于是**完成通知和唤醒共用一个阻塞点**，不需要 epoll（ADR-0003）。唤醒之后依次执行 `drain() → submit() → reap()`：排空任务队列、把这一轮 arm 出的 SQE 一次交给内核、再排空 CQ ring；阻塞条件是"任务队列空、CQ 空、且 SQ 里没有未提交项"（`io_uring_sq_ready()`——此时阻塞就会让 op 滞留未提交）。一个 ring 只接受一个注册，所以 `stop()` 先 unregister 再 close fd。IO 的提交、完成与关停各只有一条路径（ADR-0006）。
+M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `read(eventfd)` 上，`try_add` / `spawn` 成功后写这个 fd 把线程唤醒。M6 起每个 engine 建一个 io_uring 实例（只建一次、跨 `start`/`stop` 复用、只由本线程使用），用**普通** `io_uring_register_eventfd` 把该 engine 的 eventfd 绑进 ring，于是**完成通知和唤醒共用一个阻塞点**，不需要 epoll（ADR-0003）。唤醒之后依次执行 `drain() → submit() → reap()`：排空任务队列、把这一轮准备好的 SQE 一次交给内核、再排空 CQ ring；阻塞条件是"任务队列空、CQ 空、且 SQ 里没有未提交项"（`io_uring_sq_ready()`——此时阻塞就会让 op 滞留未提交）。一个 ring 只接受一个注册，所以 `stop()` 先 unregister 再 close fd。IO 的提交、完成与关停各只有一条路径（ADR-0006）。
 
 **只在 loop 真正阻塞时才写 eventfd**（M7）：`notify()` 里 `if (!m_idle.exchange(false)) return;`，loop 里先 `m_idle = true`、再看一眼队列与 CQ（只读，不运行任务），两处都空才 `read`——置位必须在复查之前，写反就是漏唤醒（窗口只有几条指令，压力测试未必复现）。`stop_requested()` 因此也要在置位之后再查一次，否则停机回调可能正好落在"查 stop"与"置位"之间而不发唤醒。内核 completion 直接写 fd、不经过这个标志，所以被内核完成通知唤醒后标志短暂仍是 true，此时到达的 push 会多发一次唤醒：多一次系统调用，无害。
 
@@ -94,9 +94,9 @@ M5 阶段还没有 ring：`start()` 只建一个 eventfd，循环只阻塞在 `r
 `request_stop()` → stop_callback 写 eventfd 唤醒 → 线程被唤醒 → 排空队列 → **等到 `running_io() == 0`** → 退出循环 → `join()` → **调用线程再 `drain()` 一次** → unregister eventfd → close fd。两处等待各有理由：
 
 - 循环自己的退出条件里带 `running_io() == 0`：**内核把 op 记在提交它的线程上**，提交线程一退出，还没完成的 op 就会以 `-ECANCELED` 回来（实测 `res=-125`；由仍然存活的线程提交则正常 `res=1`）。所以关停期间的排空必须在循环线程上完成，不能留给 join 之后的调用线程。
-- 最后那次 drain 仍不是冗余：循环可能在 stop 之前就越过了 drain，而之后又有 push 入队，只有停止方自己再排空一次才能保证"stop 返回时已入队的任务都跑过"；这些任务若 arm 了新 op，由调用线程提交并等回来，调用线程存活到最后。
+- 最后那次 drain 仍不是冗余：循环可能在 stop 之前就越过了 drain，而之后又有 push 入队，只有停止方自己再排空一次才能保证"stop 返回时已入队的任务都跑过"；这些任务若准备了新 op，由调用线程提交并等回来，调用线程存活到最后。
 
-析构 = `stop()`，所以 `~engine` 里不会再执行任务（那时异常处理函数指针已经指向正在析构的对象）。代价：优雅停机对自我续期的任务无界（被恢复的任务再 arm 新 op，`running_io` 不归零），强制切断要等取消机制。
+析构 = `stop()`，所以 `~engine` 里不会再执行任务（那时异常处理函数指针已经指向正在析构的对象）。代价：优雅停机对自我续期的任务无界（被恢复的任务再准备新 op，`running_io` 不归零），强制切断要等取消机制。
 
 ## scheduler：轮转放置与满载重试
 

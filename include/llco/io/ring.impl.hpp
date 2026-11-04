@@ -82,7 +82,7 @@ inline auto ring::running_io() const noexcept -> unsigned {
     return m_running_io.load(std::memory_order_relaxed);
 }
 
-inline void completion::armed(ring &owner, std::coroutine_handle<> caller) noexcept {
+inline void completion::track(ring &owner, std::coroutine_handle<> caller) noexcept {
     m_handle = caller;
     owner.m_running_io.fetch_add(1, std::memory_order_relaxed);
 }

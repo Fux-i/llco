@@ -36,7 +36,7 @@ class [[LLCO_AWAIT_HINT]] rw_awaiter : public completion {
 
     auto await_ready() const noexcept -> bool;
 
-    // Arms the op but leaves the submit to the loop, which flushes the batch after drain().
+    // Prepares the op; the loop submits it, flushing the batch after drain().
     void await_suspend(std::coroutine_handle<> handle);
 
     // Bytes transferred; a kernel error comes back as an error_code, not a throw.
@@ -55,7 +55,7 @@ class [[LLCO_AWAIT_HINT]] accept_awaiter : public completion {
 
     auto await_ready() const noexcept -> bool;
 
-    // Arms the accept but leaves the submit to the loop, like every other op.
+    // Prepares the accept; the loop submits it, like every other op.
     void await_suspend(std::coroutine_handle<> handle);
 
     // The new socket; a kernel error comes back as an error_code, not a throw.
@@ -75,7 +75,7 @@ class [[LLCO_AWAIT_HINT]] connect_awaiter : public completion {
 
     auto await_ready() const noexcept -> bool;
 
-    // Arms the connect but leaves the submit to the loop.
+    // Prepares the connect; the loop submits it.
     void await_suspend(std::coroutine_handle<> handle);
 
     // Completes once the connection is up; a kernel error comes back as an error_code.
@@ -94,7 +94,7 @@ class [[LLCO_AWAIT_HINT]] cancel_awaiter : public completion {
 
     auto await_ready() const noexcept -> bool;
 
-    // Arms the cancel but leaves the submit to the loop.
+    // Prepares the cancel; the loop submits it.
     void await_suspend(std::coroutine_handle<> handle);
 
     // True when something was cancelled, false when nothing was in flight; check has_value() first.

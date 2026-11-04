@@ -37,7 +37,7 @@ inline void rw_awaiter::await_suspend(std::coroutine_handle<> handle) {
         break;
     }
     ::io_uring_sqe_set_data(sqe, static_cast<completion *>(this));
-    armed(*m_ring, handle);
+    track(*m_ring, handle);
 }
 
 inline auto rw_awaiter::await_resume() const noexcept -> std::expected<std::size_t, std::error_code> {
@@ -86,7 +86,7 @@ inline void accept_awaiter::await_suspend(std::coroutine_handle<> handle) {
     auto *sqe = m_ring->next_sqe();
     ::io_uring_prep_accept(sqe, m_listener, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
     ::io_uring_sqe_set_data(sqe, static_cast<completion *>(this));
-    armed(*m_ring, handle);
+    track(*m_ring, handle);
 }
 
 inline auto accept_awaiter::await_resume() const noexcept -> std::expected<int, std::error_code> {
@@ -108,7 +108,7 @@ inline void connect_awaiter::await_suspend(std::coroutine_handle<> handle) {
     ::io_uring_prep_connect(sqe, m_fd, reinterpret_cast<const ::sockaddr *>(m_address),
                             sizeof *m_address);
     ::io_uring_sqe_set_data(sqe, static_cast<completion *>(this));
-    armed(*m_ring, handle);
+    track(*m_ring, handle);
 }
 
 inline auto connect_awaiter::await_resume() const noexcept -> std::expected<void, std::error_code> {
@@ -127,7 +127,7 @@ inline void cancel_awaiter::await_suspend(std::coroutine_handle<> handle) {
     auto *sqe = m_ring->next_sqe();
     ::io_uring_prep_cancel_fd(sqe, m_fd, 0);
     ::io_uring_sqe_set_data(sqe, static_cast<completion *>(this));
-    armed(*m_ring, handle);
+    track(*m_ring, handle);
 }
 
 inline auto cancel_awaiter::await_resume() const noexcept -> std::expected<bool, std::error_code> {

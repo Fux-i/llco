@@ -18,11 +18,11 @@ CQE 到手时用 `io_uring_cqe_get_data` 找回 awaiter，`reap()` 只对非空�
 
 awaiter 只填 SQE。循环里 `drain() → submit() → reap()`：一次 `io_uring_enter` 交一批。空提交不进内核（实测 200 次空 `submit()` 触发 0 次 `io_uring_enter`，2.62 ns/次），所以每轮都调用是免费的。阻塞条件因此是"任务队列空、CQ 空、**SQ 无未提交项**"——`io_uring_sq_ready()` 实测就是 `sqe_tail - *khead`，正好是"此时阻塞就会让 op 滞留未提交"的那批。
 
-一次 `drain()` 里 arm 的 op 可以超过 `RING_ENTRIES`，所以 `get_sqe()` 返回 `nullptr` 是常态：awaiter 先 `submit()` 把已有批次交给内核（实测提交即还槽，不必等 reap），再取槽。这一步不只是"溢出阀"：没有它时，调用方无条件解引用返回值属于 UB，优化器会把 liburing 的 `return NULL` 分支删掉——实测 2 槽的 ring 在 `-O2` 下安静地发出第 3 个 SQE，`-O0` 才崩。
+一次 `drain()` 里准备的 op 可以超过 `RING_ENTRIES`，所以 `get_sqe()` 返回 `nullptr` 是常态：awaiter 先 `submit()` 把已有批次交给内核（实测提交即还槽，不必等 reap），再取槽。这一步不只是"溢出阀"：没有它时，调用方无条件解引用返回值属于 UB，优化器会把 liburing 的 `return NULL` 分支删掉——实测 2 槽的 ring 在 `-O2` 下安静地发出第 3 个 SQE，`-O0` 才崩。
 
 ## 4. `running_io` 与关停：在提交线程上等回来
 
-`ring` 记 `running_io`（arm 时 +1，分发时 -1），`stop()` 的语义是"等到归零"。**排空必须发生在提交 op 的那个线程上**：实测同一个 ring，op 由线程 A 提交、A 退出后由主线程 reap，拿到的是 `-ECANCELED`（`res=-125`）；提交与 reap 在同一线程则是 `res=1`。所以循环线程收到 `stop_requested()` 后不能立刻返回，要满足"任务队列空 且 `running_io()==0`"才 `return`；`stop()` 只做 `request_stop + join`，之后再用一次尾部 `drain()` 收掉"循环最后一次查看之后才 push 进来的任务"——这些任务 arm 的 op 由调用线程提交，调用线程活到最后，不会被内核取消。
+`ring` 记 `running_io`（准备时 +1，分发时 -1），`stop()` 的语义是"等到归零"。**排空必须发生在提交 op 的那个线程上**：实测同一个 ring，op 由线程 A 提交、A 退出后由主线程 reap，拿到的是 `-ECANCELED`（`res=-125`）；提交与 reap 在同一线程则是 `res=1`。所以循环线程收到 `stop_requested()` 后不能立刻返回，要满足"任务队列空 且 `running_io()==0`"才 `return`；`stop()` 只做 `request_stop + join`，之后再用一次尾部 `drain()` 收掉"循环最后一次查看之后才 push 进来的任务"——这些任务准备的 op 由调用线程提交，调用线程活到最后，不会被内核取消。
 
 ## 实测（2026-10-24，本机 WSL2 内核 6.18.40；liburing 头 2.10 / 运行库 2.5）
 

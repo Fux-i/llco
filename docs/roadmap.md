@@ -399,7 +399,7 @@ ring 必须显式传进去：op 只能在 ring 属主线程上提交，没有"�
 
 | 用例 | 造法 |
 |---|---|
-| `io.read_completes_with_bytes` | 不挂 engine 的 ring：`t.resume()` arm → `r.submit()` → 写管道 → `while (!t.handle().done()) r.reap()`；顺带断言 `running_io()` 1→0 |
+| `io.read_completes_with_bytes` | 不挂 engine 的 ring：`t.resume()` 准备 → `r.submit()` → 写管道 → `while (!t.handle().done()) r.reap()`；顺带断言 `running_io()` 1→0 |
 | `io.read_wakes_only_the_right_coroutine` | 两条管道两个 task，只写一条，断言另一个没被唤醒 |
 | `io.failed_op_propagates_negative_errno` | 管道写端做 read → `-EBADF` → 返回 `error_code`（实测写端与已关闭 fd 都是 `-EBADF`，不可区分） |
 | `io.write_puts_bytes_into_the_pipe` | 写进去再从另一头读回来 |
@@ -421,7 +421,7 @@ ring 必须显式传进去：op 只能在 ring 属主线程上提交，没有"�
 `./build/bin/io_read`：
 
 ```
-[submit] one read is armed; the loop goes back to read(eventfd)
+[submit] one read is prepared; the loop goes back to read(eventfd)
 [read] 5 bytes after 52 ms: hello
 [stop] 3 loop iterations, running io: 0
 ```
@@ -434,7 +434,7 @@ ring 必须显式传进去：op 只能在 ring 属主线程上提交，没有"�
 - **`get_sqe()` 的 NULL 分支会被优化掉**：调用方无条件解引用返回值，优化器断定 NULL 不可达；2 槽 ring 在 `-O2` 下安静发出第 3 个 SQE，`-O0` 才崩。修法：`while (sqe == nullptr) { submit(); sqe = sqe(); }`，既消灭 UB，也正好是 SQ 满策略。
 - **`get_sqe()` 不清 `user_data`**（只清八个字段）：无 awaiter 的 op 必须显式 `set_data(nullptr)`，否则分发时把旧值当指针解引用。
 - **`io_uring_queue_exit` 不等也不取消**（仍有未完成 op 时 37 µs 返回）：`~ring` 之后内核不会再交回 CQE，所以"等 op 完成"必须在 ring 仍存活的时候做。
-- **优雅停机对自我续期的任务无界**：echo 的 read 循环一被恢复就 re-arm 新 op，`running_io` 不归零，`stop()` / `~engine` 会一直等；强制切断要等取消机制（见"延伸"）。
+- **优雅停机对自我续期的任务无界**：echo 的 read 循环一被恢复就重新准备新 op，`running_io` 不归零，`stop()` / `~engine` 会一直等；强制切断要等取消机制（见"延伸"）。
 - **gtest 宏会把花括号里的逗号当成参数分隔**：`EXPECT_EQ(std::string_view{a, b}, x)` 编译不过，先存具名变量。
 
 ## M12 · TCP connector / echo server
@@ -492,7 +492,7 @@ $ ./build/bin/echo_server
 **陷阱**
 
 - **`IORING_OP_WRITE` 在 socket 上会 SIGPIPE**：peer 已 RST 时 `res=-32` 且信号真的投递，SIG_DFL 下直接杀进程；`IORING_OP_SEND` 不产生信号。所以数据面另开 `send`/`recv`，`io::write` 的注释写明只给 pipe/文件（ADR-0007）。
-- **`stop()` 卡在 pending accept**：M11 的"等到 `running_io()==0`"在监听 fd 上永远等不到，必须 `io::cancel(fd)` 打断；accept 循环还要在每轮末尾看一眼中断标志，否则"连接落在信号与 cancel 之间"时会再 arm 一个没人能打断的 accept。
+- **`stop()` 卡在 pending accept**：M11 的"等到 `running_io()==0`"在监听 fd 上永远等不到，必须 `io::cancel(fd)` 打断；accept 循环还要在每轮末尾看一眼中断标志，否则"连接落在信号与 cancel 之间"时会再提交一个没人能打断的 accept。
 - **cancel 的两个 CQE 都要收**：cancel 先（`0`）、目标后（`-ECANCELED`），漏收一个就少减一次 `running_io`。
 - **`-ENOENT` 是正常竞态**：cancel 返回它说明当时没有未完成 op，映射成 `false`，不要当异常。
 - **`prep_accept` 的 flags 只作用于新 socket**：它不会让 accept 变成非阻塞（本来也不阻塞），只是让新 fd 带上 `SOCK_NONBLOCK|SOCK_CLOEXEC`。
@@ -510,7 +510,7 @@ $ ./build/bin/echo_server
 **先写的失败测试**
 
 - `tcp.scheduler_places_connections_round_robin`：4 engine + 顺序 4 条连接，每条 `serve` 记录 `current_engine()`，断言每 engine 恰好 1 条。
-- `tcp.stop_cancels_the_pending_accept`：accept 已 arm 时先 cancel 再 stop，断言 `stop()` 在预算内返回、`running_io()` 归零。
+- `tcp.stop_cancels_the_pending_accept`：accept 已提交时先 cancel 再 stop，断言 `stop()` 在预算内返回、`running_io()` 归零。
 
 **实现顺序**
 

@@ -28,10 +28,10 @@ task<> latch_waiter_steps(latch *l, int *steps) {
 }
 
 task<> thread_waiter(latch *l, std::atomic<std::thread::id> *before,
-                     std::atomic<std::thread::id> *after, std::atomic<bool> *armed,
+                     std::atomic<std::thread::id> *after, std::atomic<bool> *ready,
                      std::atomic<bool> *done) {
     before->store(std::this_thread::get_id());
-    armed->store(true);
+    ready->store(true);
     co_await l->wait();
     after->store(std::this_thread::get_id());
     done->store(true);
@@ -51,8 +51,8 @@ task<> fan_out(latch *done, std::size_t children) {
     co_return;
 }
 
-task<> cross_engine_counter(latch *l, std::atomic<bool> *armed) {
-    while (!armed->load())
+task<> cross_engine_counter(latch *l, std::atomic<bool> *ready) {
+    while (!ready->load())
         std::this_thread::yield();
     std::this_thread::sleep_for(1ms); // give the waiter time to publish
     l->count_down();
@@ -106,11 +106,11 @@ TEST(latch, cross_engine_countdown) {
     latch                        l{2};
     std::atomic<std::thread::id> before{};
     std::atomic<std::thread::id> after{};
-    std::atomic<bool>            armed{false};
+    std::atomic<bool>            ready{false};
     std::atomic<bool>            done{false};
 
-    ASSERT_TRUE(scheduler::engine_at(0).spawn(thread_waiter(&l, &before, &after, &armed, &done)));
-    ASSERT_TRUE(scheduler::engine_at(1).spawn(cross_engine_counter(&l, &armed)));
+    ASSERT_TRUE(scheduler::engine_at(0).spawn(thread_waiter(&l, &before, &after, &ready, &done)));
+    ASSERT_TRUE(scheduler::engine_at(1).spawn(cross_engine_counter(&l, &ready)));
 
     while (!done.load())
         std::this_thread::sleep_for(POLL);

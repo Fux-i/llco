@@ -122,7 +122,7 @@ TEST(tcp, stop_cancels_the_pending_accept) {
 
     run_at(0, accept_loop(&listener, &stop, &landed));
     ASSERT_TRUE(wait_until([&] { return scheduler::engine_at(0).ring().running_io() == 1; }))
-        << "the accept never armed";
+        << "the accept was never submitted";
 
     stop.store(true);
     sync_run_at(0, stop_accept(&listener));

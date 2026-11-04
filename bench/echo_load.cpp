@@ -180,7 +180,7 @@ class histogram {
 // One socket: a reusable message buffer, a receive buffer, and a ring of send timestamps.
 struct connection {
     int                        fd      = -1;
-    std::uint32_t              armed   = 0;
+    std::uint32_t              events  = 0;
     std::size_t                out_off = 0; // bytes of the current message already sent
     std::size_t                in_len  = 0;
     std::uint64_t              sent    = 0; // messages fully handed to the socket
@@ -281,7 +281,7 @@ class worker {
             c.in.resize(std::max(m_cfg.size, RECV_CAP));
             epoll_event ev{.events = EPOLLIN, .data = {.ptr = &c}};
             ::epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, c.fd, &ev);
-            c.armed = EPOLLIN;
+            c.events = EPOLLIN;
             pump(c); // depth messages go out before the first event arrives
         }
 
@@ -353,14 +353,14 @@ class worker {
             if (n < 0 && errno == EINTR)
                 continue;
             if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                arm(c, EPOLLIN | EPOLLOUT);
+                watch(c, EPOLLIN | EPOLLOUT);
                 return;
             }
             close_conn(c);
             return;
         }
         if (c.out_off == 0)
-            arm(c, EPOLLIN);
+            watch(c, EPOLLIN);
     }
 
     // Reads what is available, frames whole messages, then resumes sending.
@@ -421,12 +421,12 @@ class worker {
     }
 
     // Changes the epoll interest set only when it actually changes.
-    void arm(connection &c, std::uint32_t mask) const {
-        if (c.armed == mask)
+    void watch(connection &c, std::uint32_t events) const {
+        if (c.events == events)
             return;
-        epoll_event ev{.events = mask, .data = {.ptr = &c}};
+        epoll_event ev{.events = events, .data = {.ptr = &c}};
         ::epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, c.fd, &ev);
-        c.armed = mask;
+        c.events = events;
     }
 
     // Half-closes every socket and swallows the echoes still in flight, so the server sees EOF.
@@ -435,7 +435,7 @@ class worker {
         for (auto &c : m_conns)
             if (c.fd >= 0) {
                 ::shutdown(c.fd, SHUT_WR);
-                arm(c, EPOLLIN);
+                watch(c, EPOLLIN);
                 ++alive;
             }
         std::array<epoll_event, BATCH> events{};

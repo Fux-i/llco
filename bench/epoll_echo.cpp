@@ -93,7 +93,7 @@ struct stats {
 // One accepted connection: the current echo stays in buf until the socket drains.
 struct connection {
     int               fd      = -1;
-    std::uint32_t     armed   = 0;
+    std::uint32_t     events  = 0;
     std::size_t       out_off = 0; // bytes of buf already sent
     std::size_t       out_len = 0; // bytes of buf that still owe a send
     std::vector<char> buf;
@@ -188,7 +188,7 @@ class server {
                 connection{.fd = fd, .buf = std::vector<char>(m_cfg.chunk)});
             epoll_event ev{.events = EPOLLIN, .data = {.u64 = static_cast<std::uint64_t>(fd)}};
             ::epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, fd, &ev);
-            m_table[static_cast<std::size_t>(fd)]->armed = EPOLLIN;
+            m_table[static_cast<std::size_t>(fd)]->events = EPOLLIN;
             ++m_stats.accepted;
         }
     }
@@ -245,24 +245,24 @@ class server {
             if (n < 0 && errno == EINTR)
                 continue;
             if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                arm(fd, EPOLLOUT);
+                watch(fd, EPOLLOUT);
                 return;
             }
             ++m_stats.errors;
             close_conn(fd);
             return;
         }
-        arm(fd, EPOLLIN);
+        watch(fd, EPOLLIN);
     }
 
     // Changes the interest set only when it actually changes.
-    void arm(int fd, std::uint32_t mask) {
+    void watch(int fd, std::uint32_t events) {
         connection &c = *m_table[static_cast<std::size_t>(fd)];
-        if (c.armed == mask)
+        if (c.events == events)
             return;
-        epoll_event ev{.events = mask, .data = {.u64 = static_cast<std::uint64_t>(fd)}};
+        epoll_event ev{.events = events, .data = {.u64 = static_cast<std::uint64_t>(fd)}};
         ::epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, fd, &ev);
-        c.armed = mask;
+        c.events = events;
     }
 
     // Drops a connection; close() also removes it from the epoll set.

@@ -75,7 +75,7 @@ auto wait_for_completions(engine &e, std::size_t expected) -> bool {
 // One payload shared by the read and write cases.
 constexpr std::string_view PAYLOAD = "hello";
 
-// A bare ring needs no engine: resume() arms the op, submit() hands it over, reap() completes it.
+// A bare ring needs no engine: resume() prepares the op, submit() hands it over, reap() completes it.
 task<io_result<std::size_t>> read_once(io::ring *r, int fd, std::span<std::byte> buffer) {
     co_return co_await io::read(*r, fd, buffer);
 }
@@ -207,7 +207,7 @@ TEST(io, read_completes_with_bytes) {
 
     auto t = read_once(&r, fds[0], buffer);
     t.resume();
-    EXPECT_EQ(r.running_io(), 1U) << "arming did not count the op";
+    EXPECT_EQ(r.running_io(), 1U) << "preparing did not count the op";
     r.submit();
     ASSERT_EQ(::write(fds[1], PAYLOAD.data(), PAYLOAD.size()),
               static_cast<ssize_t>(PAYLOAD.size()));
@@ -267,7 +267,7 @@ TEST(io, failed_op_propagates_negative_errno) {
 }
 
 TEST(io, sq_full_flushes_and_retries) {
-    io::ring r{2}; // two SQEs: arming a third op must flush the queue first
+    io::ring r{2}; // two SQEs: preparing a third op must flush the queue first
     std::array<std::array<int, 2>, 3>        fds{};
     std::array<std::array<std::byte, 1>, 3> buffers{};
     for (auto &pair : fds)

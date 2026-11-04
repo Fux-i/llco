@@ -1,10 +1,8 @@
 # llco
 
-一个 C++23 协程编排运行时。`task` 管"怎么写"，`engine` 管"在哪条线程上跑"，`scheduler` 管"放到哪个 engine"。
+一个高性能、轻量级的 C++23 协程编排运行时。
 
-**它不用在热路径上。** 一次协程恢复要过队列、过调度器，成本从几十纳秒到几十微秒；llco 面向的是 off-hot-path 的多任务编排——协议解析、任务分发、等待 IO，不是逐笔行情。这条边界和它背后的实测写在 [docs/architecture.md](docs/architecture.md) 与 [docs/adr/](docs/adr/) 里，是这个仓库最想说明的事情。
-
-## 二十行看完
+## 用例
 
 ```cpp
 constexpr int JOBS = 8;
@@ -27,11 +25,11 @@ int main() {
 }
 ```
 
-子任务是普通协程，`latch` 就是 when_all，调用点看起来是同步的。完整可跑的版本是 [examples/fanout.cpp](examples/fanout.cpp)，其余场景见 [examples/README.md](examples/README.md)。
+将任务作为协程函数就可以如示例代码般编排运行。完整可跑的版本是 [examples/fanout.cpp](examples/fanout.cpp)，其余场景见 [examples/README.md](examples/README.md)。
 
 ## 快速开始
 
-需要 Linux（io_uring）、CMake ≥ 3.25、Ninja、liburing；编译器用 clang 22 + libc++ 或 GCC 14（`<print>` 需要后者）。
+需要 Linux（io_uring）、CMake ≥ 3.25、Ninja、liburing；编译器用 clang 22 + libc++ 或 GCC 14。
 
 ```bash
 cmake --preset default
@@ -71,11 +69,11 @@ flowchart LR
 
 网络 echo 对照，裸机 Ryzen 5 PRO 6650U + NixOS 6.18，4 KB 消息、单连接 ping-pong，三次中位数：
 
-| 实现 | 吞吐 | p50 | p99 | 服务端 CPU | 系统调用/消息 |
-|---|---|---|---|---|---|
-| 手写 epoll（对照） | 46.0 k msg/s | 20.61 µs | 24.23 µs | 31.0% | 3.00 |
+| 实现               | 吞吐         | p50      | p99      | 服务端 CPU | 系统调用/消息 |
+| ------------------ | ------------ | -------- | -------- | ---------- | ------------- |
+| 手写 epoll（对照） | 46.0 k msg/s | 20.61 µs | 24.23 µs | 31.0%      | 3.00          |
 | raw io_uring（对照，零框架） | 44.1 k msg/s | 21.60 µs | 25.43 µs | 40.6% | 5.00 |
-| llco，1 engine | 43.5 k msg/s | 21.66 µs | 26.96 µs | 41.1% | 5.00 |
+| llco，1 engine     | 43.5 k msg/s | 21.66 µs | 26.96 µs | 41.1%      | 5.00          |
 
 三层对照是为了把账切开：**框架本身几乎免费**（raw io_uring → llco 只差 0.06 µs、0.5 个百分点的 CPU，系统调用数完全相同），贵的是 **io_uring + eventfd 的每消息唤醒**（每消息 5 次系统调用 vs epoll 的 3 次）。64 连接时三种实现都撞在 loopback 平台上限（约 118 k msg/s）；多 engine 不提速。机器条件、归因与五条失真点见 [docs/bench.md](docs/bench.md)。
 

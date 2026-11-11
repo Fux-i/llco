@@ -32,7 +32,7 @@
 
 ## [bench.md](bench.md)
 
-性能基线方法论：采集命令、环境记录与指标口径；数字只用于改动前后对比，不是可引用的绝对性能。
+性能基线：微基准与网络 echo 两组对照（epoll / raw io_uring / llco），采集命令、机器条件、指标口径与八条失真点。数字只用于同机对比，不是可引用的绝对性能。
 
 ## [examples/README.md](../examples/README.md)
 

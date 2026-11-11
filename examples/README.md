@@ -9,7 +9,7 @@
 | [fanout.cpp](fanout.cpp) | 8 个子任务 fan-out + fan-in | `run`、`latch` | `child` 切片分散到 `engine-0..3`，父任务等 latch |
 | [resume_on.cpp](resume_on.cpp) | 跨 engine 继续执行 | `resume_on` | 同一段 `resume` 从 `engine-0` 换到 `engine-1` |
 | [io_read.cpp](io_read.cpp) | 一次 io_uring read | `io::read`、`current_engine()` | engine 先阻塞，`::write` 之后协程被内核唤醒 |
-| [echo_server.cpp](echo_server.cpp) | TCP 回显，accept 后交给 scheduler（教学示例，压测载体见下） | `net::listener`、`net::connection`、`run_at` | `accept` 在 `engine-0`，每条连接的 echo 在别的轨道 |
+| [echo_server.cpp](echo_server.cpp) | TCP 回显，accept 后交给 scheduler | `net::listener`、`net::connection`、`run_at` | `accept` 在 `engine-0`，每条连接的 echo 在别的轨道 |
 | [trace.cpp](trace.cpp) | 给自己的代码加切片 | `trace::scope` | `pipeline/load/compute` 嵌在 engine 的 `resume` 里 |
 
 ## 构建与运行
@@ -29,3 +29,10 @@ scripts/trace.sh fanout   # 产物在 build/_trace/traces/fanout/trace.json
 把 `trace.json` 拖进 <https://ui.perfetto.dev> 就能看到每条线程的时间轴（文件已在 `.gitignore` 里）。
 
 > `scripts/trace.sh echo_server` 默认会自己演一段会话（3 条连接、8 条消息）再生成 `trace.json`；想自己用 `nc 127.0.0.1 7000` 连、`Ctrl` + `C` 收尾，加 `-m`（`--manual`）。
+
+## 示例与压测载体的分工
+
+`echo_server.cpp` 和 [`bench/echo_bench.cpp`](../bench/echo_bench.cpp) 都是 TCP 回显，用途不同：
+
+- `examples/echo_server.cpp` 求可读：固定 4 个 engine、写死端口、每步打印，适合对着源码读一遍。它不接参数，也不为压测调优。
+- `bench/echo_bench.cpp` 求可控：`--engines N` 决定 engine 数，`--cpus 2,4,6` 把每个 engine 绑到一个核，没有多余打印，收尾时汇总连接数、字节数与错误数。`docs/bench.md` 里的数字全部出自它。

@@ -189,7 +189,7 @@ include/llco/
 ## 工程约束（本机实测，2026-10）
 
 - **工具链**：clang 22.1.8 + libc++，`-std=c++23`，CMake 3.28.3 + Ninja，16 核。clang 22 不再需要 `-fcoroutines`（会报 unused 警告）。
-- **四套构建由 `CMakePresets.json` 定义**，命令形态统一为 `cmake --preset <p> && cmake --build --preset <p> && ctest --preset <p>`：`default`（clang 22 + libc++，`build/`）、`asan`（`build/_asan`，ASan+UBSan，testPreset 里带 `ASAN_OPTIONS=detect_leaks=1`）、`trace`（`build/_trace`，`LLCO_TRACE=ON`）、`gcc`（g++-14，`build/_gcc`）。本地变体写进 `CMakeUserPresets.json`（已 gitignore）。
+- **五套构建由 `CMakePresets.json` 定义**，命令形态统一为 `cmake --preset <p> && cmake --build --preset <p> && ctest --preset <p>`：`default`（clang 22 + libc++，`build/`）、`asan`（`build/_asan`，ASan+UBSan，testPreset 里带 `ASAN_OPTIONS=detect_leaks=1`）、`tsan`（`build/_tsan`，ThreadSanitizer）、`trace`（`build/_trace`，`LLCO_TRACE=ON`）、`gcc`（g++-14，`build/_gcc`）。本地变体写进 `CMakeUserPresets.json`（已 gitignore）。
 - **所有可执行文件输出到 `build/bin`**：`CMAKE_RUNTIME_OUTPUT_DIRECTORY` 全局设置，测试/示例/bench 共用同一个目录，脚本才能只靠 target 名定位二进制。
 - **`<print>` 需要 GCC ≥ 14**：`default_exception_handler` 用 `std::println`。本机 GCC 13.3 的 libstdc++ 没有 `<print>`，clang 22 + libc++ 和 **GCC 14.2.0** 都能编（实测 g++-14 整个构建 16/16 通过）；直接运行 `cmake` 时默认挑到的 `g++` 是 13，这才是"不指定编译器就编译失败"的根因。
 - **clang-tidy 必须与 clang 同主版本**：本机 `~/.local/bin/clang-tidy` 是 **22.1.8**（pip wheel 装在 `~/.local/venv-tidy`，软链进 `~/.local/bin`）。21 以下没有 `modernize-use-scoped-lock` 这类新 check，编辑器（clice 自带 22）能看见而 CLI 看不见，两边就会各说各话。入口：`cmake --build build --target lint`（CMake 里 `find_program` 依次找 `clang-tidy-22` / `clang-tidy-21` / `clang-tidy`）。
@@ -231,7 +231,7 @@ work stealing、协作式取消（`stop_token` 传播）、优先级队列、手
 ## 已知边界
 
 - **scheduler 的生命周期与 submit 不并发**：`scheduler::init` / `stop` 只在启动与收尾调用，不得与 `submit` 并发——`init` 换的是整张 engine 表、`stop` 改的是 `m_running`，这些状态转换没有锁保护。
-- **`engine_at(i)` 的前置条件**：要求 `i < size()`。debug 构建里是 `assert`（本仓库四套 preset 都是 Release，`NDEBUG` 下断言不生效），release 构建没有运行时检查；从未 `init` 就 `stop()` 之后再取 engine，或 `i` 越界，都是未定义行为。
+- **`engine_at(i)` 的前置条件**：要求 `i < size()`。debug 构建里是 `assert`（本仓库五套 preset 都是 Release，`NDEBUG` 下断言不生效），release 构建没有运行时检查；从未 `init` 就 `stop()` 之后再取 engine，或 `i` 越界，都是未定义行为。
 - **`trace::flush` 只能在没有其它线程产生事件时调用**：典型时机是所有 engine 都已停止；lane 的 `push` 无锁，只往本线程缓冲里追加，flush 期间并发产生的事件会与写出竞争。
 - **`stop()` 对自我续期的任务无界**：连接上待完成的 `recv` 会让 `running_io` 永不归零，`stop()` 就一直等；这类任务需要先 `io::cancel` 打断。
 - **engine 默认不绑核**：`scheduler::init(count)` 不传核表时，engine 线程由内核放置。隔离核机器（`isolcpus`）上隔离核没有周期性负载均衡，一个进程的所有 engine 线程会挤在同一个核上，多 engine 因此不扩展；要测扩展性或部署到这类机器，必须用 `init(count, cpus)` 显式绑核（ADR-0013）。

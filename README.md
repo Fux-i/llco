@@ -37,11 +37,11 @@ cmake --build --preset default
 ctest --preset default
 ```
 
-四套构建都在 [CMakePresets.json](CMakePresets.json) 里：`default`（clang + libc++）、`asan`（ASan + UBSan）、`trace`（打开 trace）、`gcc`（G++ 14）。示例、测试与 bench 统一输出到 `build/bin`。
+五套构建都在 [CMakePresets.json](CMakePresets.json) 里：`default`（clang + libc++）、`asan`（ASan + UBSan）、`tsan`（ThreadSanitizer）、`trace`（打开 trace）、`gcc`（G++ 14）。示例、测试与 bench 统一输出到 `build/bin`。
 
 ```bash
-./build/bin/echo_server     # 监听 127.0.0.1:7000，nc 上去回显
-scripts/trace.sh fanout     # 生成 trace.json，拖进 ui.perfetto.dev
+./build/bin/echo_server     # 监听 127.0.0.1:7000，可以 nc 连接上去测试
+scripts/trace.sh fanout     # 生成 trace.json，可借助 ui.perfetto.dev 可视化
 ```
 
 ## 架构
@@ -54,7 +54,7 @@ flowchart LR
   E --> R["io_uring + eventfd（同一个阻塞点）"]
 ```
 
-三条单向依赖：`engine` 不认识 `scheduler`，`task` 不认识 `engine`，`io_uring` 不出 `engine`。分层理由与每处取舍见 [docs/architecture.md](docs/architecture.md)。
+各层级间单向依赖。分层理由与每处取舍见 [docs/architecture.md](docs/architecture.md)。
 
 ## 文档
 
@@ -67,7 +67,7 @@ flowchart LR
 
 运行时微基准（同机 A/B）：单次 `try_add`、跨线程唤醒、`spawn` + 完成、`sync_wait` 往返、`resume_on` 往返。方法见 [docs/bench.md](docs/bench.md)。
 
-网络 echo 对照，裸机 Ryzen 5 PRO 6650U + NixOS 6.18，4 KB 消息、单连接 ping-pong，三次中位数：
+echo_server 对照组，裸机 Ryzen 5 PRO 6650U + NixOS 6.18，4 KB 消息、单连接 ping-pong，三次中位数：
 
 | 实现               | 吞吐         | p50      | p99      | 服务端 CPU | 系统调用/消息 |
 | ------------------ | ------------ | -------- | -------- | ---------- | ------------- |
@@ -75,14 +75,26 @@ flowchart LR
 | raw io_uring（对照，零框架） | 44.1 k msg/s | 21.60 µs | 25.43 µs | 40.6% | 5.00 |
 | llco，1 engine     | 43.5 k msg/s | 21.66 µs | 26.96 µs | 41.1%      | 5.00          |
 
-三层对照是为了把账切开：**框架本身几乎免费**（raw io_uring → llco 只差 0.06 µs、0.5 个百分点的 CPU，系统调用数完全相同），贵的是 **io_uring + eventfd 的每消息唤醒**（每消息 5 次系统调用 vs epoll 的 3 次）。
+三层对照可得结论：**框架本身几乎 0 开销**（raw io_uring → llco 只差 0.06 µs、0.5 个百分点的 CPU，系统调用数完全相同）。单连接时开销大的是 **io_uring + eventfd 的每消息唤醒**（每消息 5 次系统调用 vs epoll 的 3 次）。
 
-多 engine 的扩展性要单独看：三个 engine 各绑一核、负载端给足六个进程时，1→2→3 engine 是 **141 → 253 → 325 k msg/s**，服务端 CPU 58% → 113% → 173%。两个前提缺一不可——engine 必须用 `--cpus` 绑到不同核（这台机器开了 `isolcpus`，隔离核没有负载均衡，不绑时所有 engine 线程会挤在同一个核上，实测 4 个 engine 全在 `cpu2`），负载端也必须跟着加。早期版本记下的"多 engine 不提速"，就是这两条同时没做。机器条件、归因与七条失真点见 [docs/bench.md](docs/bench.md)。
+384 连接、六线程负载端、engine 各绑一核时：
+
+| 实现                         | 吞吐          | p50     | p99     | 服务端 CPU |
+| ---------------------------- | ------------- | ------- | ------- | ---------- |
+| 手写 epoll（对照）           | 134.6 k msg/s | 2857 µs | 3003 µs | 63.7%      |
+| raw io_uring（对照，零框架） | 147.5 k msg/s | 2599 µs | 2731 µs | 57.0%      |
+| llco，1 engine               | 146.6 k msg/s | 1705 µs | 1751 µs | 58.0%      |
+| llco，2 engines              | 290.6 k msg/s | 852 µs  | 884 µs  | 113.2%     |
+| llco，3 engines              | 367.1 k msg/s | 977 µs  | 2000 µs | 182.9%     |
+
+单连接时 io_uring 比 epoll 贵（每消息 5 次系统调用对 3 次），连接数上来后反过来：llco 每消息只付 0.031 次 `io_uring_enter`，一次提交带走约 32 条消息，而 epoll 每条消息固定 1 次 `recvfrom` + 1 次 `sendto`。所以这里 llco 比 epoll 快 8.9%、服务端 CPU 低 5.7 个百分点。
+
+机器条件、归因与八条失真点见 [docs/bench.md](docs/bench.md)。
 
 ## 已知限制
 
 - 没有取消与超时：`stop()` 要等 `running_io() == 0`，连接上待完成的 `recv` 必须先 `io::cancel` 才能退出。
-- IPv4 only；没有 `TCP_NODELAY`、没有连接数上限。
+- IPv4 only；`net::connection` 不设 `TCP_NODELAY`（示例与压测载体自己设）、没有连接数上限。
 - 队列有界（8192）：满载时 `scheduler::submit` 返回 `false` 并销毁帧（[ADR-0004](docs/adr/0004-full-queue-policy.md)）。
 - `scheduler` 是进程内单例，`init` / `stop` 不得与 `submit` 并发。
 - engine 默认不绑核：`init(count)` 不传核表时线程由内核放置，`isolcpus` 机器上会挤在一个核（[ADR-0013](docs/adr/0013-engine-affinity.md)）。

@@ -3,6 +3,8 @@
 这份路线图按"一步只加一个东西"来切：每个里程碑都能单独跑、单独看到输出、单独提交一次 commit。
 
 > 文中的示例文件名与二进制名是当时的：`examples/engine_manual.cpp`、`examples/threaded_engine.cpp` 与 `./build/bin/scheduler` 后来并成了 `examples/run.cpp`（`./build/bin/run`），`scripts/trace.sh scheduler` 对应的命令现在是 `scripts/trace.sh run`。
+>
+> 各里程碑"完成标志"里写的"四套构建"是当时的门禁；现在是五套（加了 `tsan`），见 [architecture.md](architecture.md)。
 
 每个里程碑都**测试先行**：先写会失败的用例，确认它失败的原因正是"这个功能还不存在"，再动手实现。失败应当表现为断言不成立，而不是编译不过——编译不过说明接口还没定，先补声明。
 

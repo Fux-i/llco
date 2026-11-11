@@ -40,15 +40,16 @@ constexpr int           FINISH_POLL_MS  = 10;
 
 // Command-line configuration; the defaults match the echo server's defaults.
 struct config {
-    std::string_view host    = "127.0.0.1";
-    std::uint16_t    port    = 7000;
-    std::size_t      conns   = 64;
-    std::size_t      depth   = 1;
-    std::size_t      size    = 4096;
-    std::uint64_t    seconds = 10;
-    std::uint64_t    warmup  = 2;
-    std::size_t      threads = 1;
-    bool             csv     = false;
+    std::string_view      host    = "127.0.0.1";
+    std::uint16_t         port    = 7000;
+    std::size_t           conns   = 64;
+    std::size_t           depth   = 1;
+    std::size_t           size    = 4096;
+    std::uint64_t         seconds = 10;
+    std::uint64_t         warmup  = 2;
+    std::size_t           threads = 1;
+    std::vector<unsigned> cpus; // worker i pins to cpus[i % size]; empty leaves them unpinned
+    bool                  csv = false;
 };
 
 // Aborts with one line: a bad command line or an unreachable server cannot be measured.
@@ -69,6 +70,18 @@ auto parse_u64(std::string_view text, std::string_view flag) -> std::uint64_t {
     if (ec != std::errc{} || end != last)
         fail(std::format("bad value for {}", flag));
     return value;
+}
+
+// Splits a comma-separated cpu list, the shape taskset takes.
+auto parse_cpus(std::string_view text) -> std::vector<unsigned> {
+    std::vector<unsigned> cpus;
+    for (std::size_t at = 0; at < text.size();) {
+        const auto comma = text.find(',', at);
+        const auto stop  = comma == std::string_view::npos ? text.size() : comma;
+        cpus.push_back(static_cast<unsigned>(std::stoi(std::string{text.substr(at, stop - at)})));
+        at = stop + 1;
+    }
+    return cpus;
 }
 
 // Parses the whole command line; every flag takes a value except --csv.
@@ -101,6 +114,8 @@ auto parse(int argc, char **argv) -> config {
             cfg.warmup = parse_u64(value, arg);
         else if (arg == "--threads")
             cfg.threads = parse_u64(value, arg);
+        else if (arg == "--cpus")
+            cfg.cpus = parse_cpus(value);
         else
             fail(std::format("unknown flag {}", arg));
     }
@@ -270,7 +285,8 @@ class worker {
         : m_cfg{cfg}, m_addr{addr}, m_connected{connected}, m_starting{starting},
           m_measured{measured} {}
 
-    // Connects, warms up, measures, and returns this thread's samples.
+    // Connects, warms up, measures, and returns this thread's samples. The caller pins the thread
+    // before it gets here, because a cpu the kernel rejects would otherwise be silently ignored.
     auto run() -> result {
         m_epoll_fd = ::epoll_create1(EPOLL_CLOEXEC);
         m_conns.resize(m_cfg.conns / m_cfg.threads);
@@ -499,8 +515,18 @@ auto main(int argc, char **argv) -> int {
     std::vector<std::jthread> threads;
     threads.reserve(cfg.threads);
     for (std::size_t i = 0; i < cfg.threads; ++i)
-        threads.emplace_back(
-            [&, i] { results[i] = worker{cfg, addr, connected, starting, measured}.run(); });
+        threads.emplace_back([&, i] {
+            // Each worker gets its own core: isolated cores get no load balancing, so unpinned
+            // workers would all land on one core and the client would cap itself.
+            if (!cfg.cpus.empty()) {
+                cpu_set_t set;
+                CPU_ZERO(&set);
+                CPU_SET(cfg.cpus.at(i % cfg.cpus.size()), &set);
+                [[maybe_unused]]
+                auto rc = ::pthread_setaffinity_np(::pthread_self(), sizeof set, &set);
+            }
+            results[i] = worker{cfg, addr, connected, starting, measured}.run();
+        });
 
     connected.arrive_and_wait(); // every socket is connected
     starting.arrive_and_wait();  // the warmup window is over

@@ -23,19 +23,20 @@ ROOT=$(git rev-parse --show-toplevel)
 BIN=$ROOT/build/bin
 
 # name|binary|server args|server cpus|client cpus|client threads|connections
+#
+# Server cpus and client cpus never share a physical core: the pairs are (0,1)(2,3)(4,5)
+# (6,7)(8,9)(10,11), so a 3-engine server on 2,4,6 leaves 8,9,10,11,0,1 to the load
+# generator. Both sides pin explicitly -- isolcpus leaves no load balancing, so unpinned
+# threads all land on one core and the measurement stops meaning anything (ADR-0013).
 ROWS=(
     'epoll-1|epoll_echo||2|4,6,8|1|1'
     'raw-1|raw_uring_echo||2|4,6,8|1|1'
-    'llco1-1|echo_bench|--engines 1|2|4,6,8|1|1'
-    'epoll-64|epoll_echo||2|4,6,8|2|64'
-    'raw-64|raw_uring_echo||2|4,6,8|2|64'
-    # The llco rows pin each engine to its own core: isolcpus leaves no load balancing, so
-    # without --cpus every engine thread of the process lands on the first core (ADR-0013).
-    # The server keeps three cores and the load generator three, so engine count is the only
-    # variable; a 2-thread client starves a 3-engine server and caps every row near 118 k.
-    'llco1-64|echo_bench|--engines 1 --cpus 2|2|4,6,8|2|64'
-    'llco2-64|echo_bench|--engines 2 --cpus 2,4|2,4|8,10|2|64'
-    'llco3-64|echo_bench|--engines 3 --cpus 2,4,6|2,4,6|8,10|2|64'
+    'llco1-1|echo_bench|--engines 1 --cpus 2|2|4,6,8|1|1'
+    'epoll-64|epoll_echo||2|8,9,10,11,0,1|6|384'
+    'raw-64|raw_uring_echo||2|8,9,10,11,0,1|6|384'
+    'llco1-64|echo_bench|--engines 1 --cpus 2|2|8,9,10,11,0,1|6|384'
+    'llco2-64|echo_bench|--engines 2 --cpus 2,4|2,4|8,9,10,11,0,1|6|384'
+    'llco3-64|echo_bench|--engines 3 --cpus 2,4,6|2,4,6|8,9,10,11,0,1|6|384'
 )
 
 command -v taskset >/dev/null || { echo 'taskset missing (util-linux)' >&2; exit 1; }
@@ -128,6 +129,7 @@ run_row() {
     t0=$(date +%s%N)
     csv=$(taskset -c "$client_cpus" "$BIN/echo_load" --host "$HOST" --port "$PORT" \
               --conns "$conns" --depth "$DEPTH" --size "$SIZE" --threads "$threads" \
+              --cpus "$client_cpus" \
               --warmup "$WARMUP" --seconds "$RUN_SECONDS" --csv)
     t1=$(date +%s%N)
     after=$(cpu_ticks)

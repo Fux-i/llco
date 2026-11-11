@@ -75,7 +75,9 @@ flowchart LR
 | raw io_uring（对照，零框架） | 44.1 k msg/s | 21.60 µs | 25.43 µs | 40.6% | 5.00 |
 | llco，1 engine     | 43.5 k msg/s | 21.66 µs | 26.96 µs | 41.1%      | 5.00          |
 
-三层对照是为了把账切开：**框架本身几乎免费**（raw io_uring → llco 只差 0.06 µs、0.5 个百分点的 CPU，系统调用数完全相同），贵的是 **io_uring + eventfd 的每消息唤醒**（每消息 5 次系统调用 vs epoll 的 3 次）。64 连接时三种实现都撞在 loopback 平台上限（约 118 k msg/s）；多 engine 不提速。机器条件、归因与五条失真点见 [docs/bench.md](docs/bench.md)。
+三层对照是为了把账切开：**框架本身几乎免费**（raw io_uring → llco 只差 0.06 µs、0.5 个百分点的 CPU，系统调用数完全相同），贵的是 **io_uring + eventfd 的每消息唤醒**（每消息 5 次系统调用 vs epoll 的 3 次）。
+
+多 engine 的扩展性要单独看：三个 engine 各绑一核、负载端给足六个进程时，1→2→3 engine 是 **141 → 253 → 325 k msg/s**，服务端 CPU 58% → 113% → 173%。两个前提缺一不可——engine 必须用 `--cpus` 绑到不同核（这台机器开了 `isolcpus`，隔离核没有负载均衡，不绑时所有 engine 线程会挤在同一个核上，实测 4 个 engine 全在 `cpu2`），负载端也必须跟着加。早期版本记下的"多 engine 不提速"，就是这两条同时没做。机器条件、归因与七条失真点见 [docs/bench.md](docs/bench.md)。
 
 ## 已知限制
 
@@ -83,6 +85,7 @@ flowchart LR
 - IPv4 only；没有 `TCP_NODELAY`、没有连接数上限。
 - 队列有界（8192）：满载时 `scheduler::submit` 返回 `false` 并销毁帧（[ADR-0004](docs/adr/0004-full-queue-policy.md)）。
 - `scheduler` 是进程内单例，`init` / `stop` 不得与 `submit` 并发。
+- engine 默认不绑核：`init(count)` 不传核表时线程由内核放置，`isolcpus` 机器上会挤在一个核（[ADR-0013](docs/adr/0013-engine-affinity.md)）。
 - `trace::flush` 只能在没有其它线程产生事件时调用（典型：所有 engine 停止后）。
 - 不做 work stealing、优先级队列、跨进程。
 

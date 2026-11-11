@@ -26,11 +26,24 @@ namespace {
 constexpr auto CHUNK = std::size_t{4096};
 
 struct options {
-    std::uint16_t port    = 7000;
-    unsigned      engines = 4;
+    std::uint16_t         port    = 7000;
+    unsigned              engines = 4;
+    std::vector<unsigned> cpus; // engine i pins to cpus[i % size]; empty leaves them unpinned
 };
 
-// Reads --port and --engines; any other argument is a usage error.
+// Splits a comma-separated cpu list, the shape taskset takes.
+auto parse_cpus(std::string_view text) -> std::vector<unsigned> {
+    std::vector<unsigned> cpus;
+    for (std::size_t at = 0; at < text.size();) {
+        const auto comma = text.find(',', at);
+        const auto stop  = comma == std::string_view::npos ? text.size() : comma;
+        cpus.push_back(static_cast<unsigned>(std::stoi(std::string{text.substr(at, stop - at)})));
+        at = stop + 1;
+    }
+    return cpus;
+}
+
+// Reads --port, --engines and --cpus; any other argument is a usage error.
 auto parse(int argc, char **argv) -> options {
     options opt;
     for (int i = 1; i < argc; ++i) {
@@ -42,8 +55,11 @@ auto parse(int argc, char **argv) -> options {
         } else if (arg == "--engines" && i + 1 < argc) {
             // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): argv is a C array
             opt.engines = static_cast<unsigned>(std::stoi(argv[++i]));
+        } else if (arg == "--cpus" && i + 1 < argc) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): argv is a C array
+            opt.cpus = parse_cpus(argv[++i]);
         } else {
-            std::println(stderr, "usage: echo_bench [--port N] [--engines N]");
+            std::println(stderr, "usage: echo_bench [--port N] [--engines N] [--cpus 2,4,6]");
             std::exit(2);
         }
     }
@@ -158,7 +174,7 @@ int main(int argc, char **argv) {
     sigaddset(&set, SIGTERM);
     pthread_sigmask(SIG_BLOCK, &set, nullptr);
 
-    scheduler::init(opt.engines);
+    scheduler::init(opt.engines, opt.cpus);
     net::listener listener{opt.port};
     std::println("[listen] 127.0.0.1:{}", listener.port());
     (void)std::fflush(stdout);

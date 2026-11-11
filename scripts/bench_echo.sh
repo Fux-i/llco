@@ -29,9 +29,13 @@ ROWS=(
     'llco1-1|echo_bench|--engines 1|2|4,6,8|1|1'
     'epoll-64|epoll_echo||2|4,6,8|2|64'
     'raw-64|raw_uring_echo||2|4,6,8|2|64'
-    'llco1-64|echo_bench|--engines 1|2|4,6,8|2|64'
-    'llco2-64|echo_bench|--engines 2|2,4|8,10|2|64'
-    'llco3-64|echo_bench|--engines 3|2,4,6|8,10|2|64'
+    # The llco rows pin each engine to its own core: isolcpus leaves no load balancing, so
+    # without --cpus every engine thread of the process lands on the first core (ADR-0013).
+    # The server keeps three cores and the load generator three, so engine count is the only
+    # variable; a 2-thread client starves a 3-engine server and caps every row near 118 k.
+    'llco1-64|echo_bench|--engines 1 --cpus 2|2|4,6,8|2|64'
+    'llco2-64|echo_bench|--engines 2 --cpus 2,4|2,4|8,10|2|64'
+    'llco3-64|echo_bench|--engines 3 --cpus 2,4,6|2,4,6|8,10|2|64'
 )
 
 command -v taskset >/dev/null || { echo 'taskset missing (util-linux)' >&2; exit 1; }

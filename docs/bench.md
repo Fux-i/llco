@@ -59,7 +59,7 @@
 | 协议 | 裸 TCP echo，4 KB 消息，客户端 ping-pong（`depth=1`） |
 | 采样 | 每格 3 次、A/B 交替；每次 warmup 2 s + 测量 10 s，取中位数 |
 
-驱动：[scripts/bench_echo.sh](../scripts/bench_echo.sh)，原始行在 `bench-results/results.csv`。
+驱动：[scripts/bench_echo.sh](../scripts/bench_echo.sh)，每次运行的原始行写到 `bench-results/results.csv`（该目录在 `.gitignore` 里，不入库）。
 
 ### 单连接：延迟与每消息成本
 
@@ -93,12 +93,16 @@
 
 1. **框架本身几乎免费。** raw io_uring 与 llco 的每消息系统调用完全一致（5.00），p50 差 0.06 µs（21.60 → 21.66），服务端 CPU 差 0.5 个百分点（40.6% → 41.1%）。协程 resume、有界队列入队、scheduler 放置合起来只值这个量级。
 2. **贵的是 io_uring + eventfd 这套机制。** epoll 每消息 3 次系统调用，io_uring 每消息 5 次（2 次 `io_uring_enter` 提交 + 3 次 `read(eventfd)` 唤醒），代价是 p50 +1.0 µs、服务端 CPU +9.6 个百分点、吞吐 -5%。
-3. **多 engine 不提速。** 1→2→3 engine：118.2 → 117.6 → 115.8 k msg/s，服务端 CPU 66.9% → 70.8%。64 连接时瓶颈在 loopback 与每消息两次系统调用，不在调度；多一个 engine 只多一份唤醒。
+3. **多 engine 会扩展，但前提是给够核、给够负载。** 三个 engine 各绑一核（`--cpus 2,4,6`）、六个负载端进程共 384 连接时：141 → 253 → 325 k msg/s（两次运行的中位数），服务端 CPU 58% → 113% → 173%，客户端 CPU 119% → 228% → 329%。
+
+   两个条件缺一个就看不出扩展；早期版本记的"多 engine 不提速"，是这两条同时没做：
+   - **不绑核**。这台机器带 `isolcpus=2-11`，隔离核没有周期性负载均衡，一个进程的所有 engine 线程会全部落在第一个核上（实测 4 个 engine 的 `last_cpu` 都是 2，`cpu2 busy=98%`，`cpu4/6/8` 空闲）。同一台机器上 4 个独立进程各绑一核聚合 282 k，1 个进程 4 个 engine 只有 145 k，差别只在"线程能不能落到别的核"。`--cpus` 就是为此加的（ADR-0013）。
+   - **负载不够**。64 连接 + depth 1 + 2 个客户端线程时，客户端自己就是瓶颈：1 engine 已经把服务端 CPU 吃到 61%，2 engine 仍然只有 99%——第三块核拿不到活。要测扩展性，连接数与负载端进程都要跟着 engine 数走。
 
 ### 不要拿这组数字宣称什么
 
 - 不能说"io_uring 比 epoll 快/慢"。这里测的是 one-shot op + eventfd 唤醒的实现，没有 batching、没有 multishot、没有 registered files。
-- 不能说"llco 支持 X M msg/s"。4 KB + loopback + 这颗 15 W CPU 的上限就是约 118 k msg/s。
+- 不能说"llco 支持 X M msg/s"。4 KB + loopback + 这颗 15 W CPU，三引擎三核能到约 325 k msg/s，但这个数随客户端能给出的负载浮动；换协议、换消息大小、换机器都不成立。
 - 不能与 nginx / Seastar 横向比较：协议与功能都不同。
 - 64 连接行的 p99（5.28 ms）是客户端排队（64 连接 ÷ 2 客户端线程 × 单条往返），不是服务端尾延迟。
 
@@ -109,6 +113,8 @@
 3. **`scaling_cur_freq` 在采样点读到 1.1 GHz**：那是两次突发之间 governor 请求的档位，不是执行频率。把 `scaling_min_freq` 顶到 4.59 GHz 后单连接 p50 只变化 0.3–0.7 µs，说明突发本身已经跑在高频。
 4. **C-state 没有禁用**：这台机器没有 `processor.max_cstate` 参数；运行时用 `/dev/cpu_dma_latency` 约束，实测对 p50 无可测影响（两侧都是 20.6 µs），所以没有启用。
 5. **两套 io_uring 实现都不做 batching**：这是"同一套系统调用路径"的对等比较，不是 io_uring 的最佳形态。
+6. **不绑核时多 engine 的数字没有意义**：`isolcpus` 机器上所有 engine 线程挤在同一个核，测到的是"线程抢一个核"，不是调度器的结果。`scripts/bench_echo.sh` 的 llco 行现在都带 `--cpus`。
+7. **扩展性数据是 2–6 个负载端进程喂出来的**：单进程客户端在这台机器上最多给出约 145 k msg/s，更高就要加生成器进程。这是偏移量，不是 llco 的上限。
 
 ### 复现
 

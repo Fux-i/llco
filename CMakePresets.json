@@ -32,6 +32,14 @@
       }
     },
     {
+      "name": "tsan",
+      "inherits": "clang-base",
+      "binaryDir": "${sourceDir}/build/_tsan",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer -g"
+      }
+    },
+    {
       "name": "trace",
       "inherits": "clang-base",
       "binaryDir": "${sourceDir}/build/_trace",
@@ -42,6 +50,7 @@
   "buildPresets": [
     { "name": "default", "configurePreset": "default" },
     { "name": "asan", "configurePreset": "asan" },
+    { "name": "tsan", "configurePreset": "tsan" },
     { "name": "trace", "configurePreset": "trace" },
     { "name": "gcc", "configurePreset": "gcc" }
   ],
@@ -53,6 +62,7 @@
       "environment": { "ASAN_OPTIONS": "detect_leaks=1" },
       "output": { "outputOnFailure": true }
     },
+    { "name": "tsan", "configurePreset": "tsan", "output": { "outputOnFailure": true } },
     { "name": "trace", "configurePreset": "trace", "output": { "outputOnFailure": true } },
     { "name": "gcc", "configurePreset": "gcc", "output": { "outputOnFailure": true } }
   ]

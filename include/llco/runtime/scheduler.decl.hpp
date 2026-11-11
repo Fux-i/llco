@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <memory>
+#include <span>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -27,7 +28,7 @@ class scheduler {
 
     static auto instance() -> scheduler &;
 
-    void start(unsigned count);
+    void start(unsigned count, std::span<const unsigned> cpus);
     void halt();
 
     // Builds the default pool for a scheduler nobody initialized, once even under a first-use race.
@@ -35,7 +36,10 @@ class scheduler {
 
   public:
     // (Re)builds the pool, stopping whatever was already running; count 0 means a single engine.
-    static void init(unsigned count = std::thread::hardware_concurrency());
+    // cpus pins engine i to cpus[i % size], which isolated cores need (ADR-0013); empty leaves
+    // every engine unpinned and the scheduler hands placement to the kernel.
+    static void init(unsigned count = std::thread::hardware_concurrency(),
+                     std::span<const unsigned> cpus = {});
 
     // Stops every engine, each draining what was already queued; submit afterwards returns false.
     // The engines stay readable for their counters until the next init().

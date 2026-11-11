@@ -16,7 +16,7 @@ inline scheduler::~scheduler() {
     halt();
 }
 
-inline void scheduler::start(unsigned count) {
+inline void scheduler::start(unsigned count, std::span<const unsigned> cpus) {
     halt();
     m_started.store(true, std::memory_order_release);
     if (count == 0)
@@ -30,7 +30,8 @@ inline void scheduler::start(unsigned count) {
 #if LLCO_TRACE
         m_engines.back()->set_lane("engine-" + std::to_string(i));
 #endif
-        m_engines.back()->start();
+        m_engines.back()->start(cpus.empty() ? std::nullopt
+                                             : std::optional{cpus[i % cpus.size()]});
     }
 }
 
@@ -45,11 +46,11 @@ inline void scheduler::halt() {
 inline void scheduler::ensure_started() {
     if (m_started.load(std::memory_order_acquire))
         return;
-    std::call_once(m_default_pool, [this] { start(std::thread::hardware_concurrency()); });
+    std::call_once(m_default_pool, [this] { start(std::thread::hardware_concurrency(), {}); });
 }
 
-inline void scheduler::init(unsigned count) {
-    instance().start(count);
+inline void scheduler::init(unsigned count, std::span<const unsigned> cpus) {
+    instance().start(count, cpus);
 }
 
 inline void scheduler::stop() {

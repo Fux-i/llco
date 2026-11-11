@@ -15,6 +15,8 @@
 #include <thread>
 #include <utility>
 
+#include <pthread.h>
+#include <sched.h>
 #include <sys/eventfd.h>
 #include <unistd.h>
 
@@ -62,7 +64,8 @@ inline engine::~engine() {
     stop();
 }
 
-inline void engine::start() {
+inline void engine::start(std::optional<unsigned> cpu) {
+    m_cpu = cpu;
     if (!m_ring)
         m_ring.emplace();
     m_event_fd = ::eventfd(0, EFD_CLOEXEC);
@@ -148,6 +151,15 @@ inline void engine::wait() noexcept {
 }
 
 inline void engine::loop(const std::stop_token &token) {
+    if (m_cpu) {
+        cpu_set_t set;
+        CPU_ZERO(&set);
+        CPU_SET(*m_cpu, &set);
+        // A single cpu either lands whole or not at all, so the result needs no check: a rejected
+        // cpu leaves the thread unpinned, which is what start() promises.
+        [[maybe_unused]]
+        auto rc = ::pthread_setaffinity_np(::pthread_self(), sizeof set, &set);
+    }
     detail::engine_slot() = this;
 #if LLCO_TRACE
     if (!m_lane.empty())

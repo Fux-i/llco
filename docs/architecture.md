@@ -234,5 +234,6 @@ work stealing、协作式取消（`stop_token` 传播）、优先级队列、手
 - **`engine_at(i)` 的前置条件**：要求 `i < size()`。debug 构建里是 `assert`（本仓库四套 preset 都是 Release，`NDEBUG` 下断言不生效），release 构建没有运行时检查；从未 `init` 就 `stop()` 之后再取 engine，或 `i` 越界，都是未定义行为。
 - **`trace::flush` 只能在没有其它线程产生事件时调用**：典型时机是所有 engine 都已停止；lane 的 `push` 无锁，只往本线程缓冲里追加，flush 期间并发产生的事件会与写出竞争。
 - **`stop()` 对自我续期的任务无界**：连接上待完成的 `recv` 会让 `running_io` 永不归零，`stop()` 就一直等；这类任务需要先 `io::cancel` 打断。
+- **engine 默认不绑核**：`scheduler::init(count)` 不传核表时，engine 线程由内核放置。隔离核机器（`isolcpus`）上隔离核没有周期性负载均衡，一个进程的所有 engine 线程会挤在同一个核上，多 engine 因此不扩展；要测扩展性或部署到这类机器，必须用 `init(count, cpus)` 显式绑核（ADR-0013）。
 - **网络层边界**：IPv4 only（`connect` 收 `sockaddr_in`）；没有超时、没有 `TCP_NODELAY`、没有连接数上限。
 - **队列满载**：`scheduler::submit` 返回 `false` 且帧被销毁，调用方必须检查返回值（ADR-0004）。

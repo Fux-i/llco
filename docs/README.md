@@ -24,6 +24,7 @@
 | [0010](adr/0010-scheduler-is-a-singleton.md) | scheduler 是进程内单例 | 公开面全是静态函数，`init(n)` 可重建池；`init` / `stop` 不能与 `submit` 并发。 |
 | [0011](adr/0011-task-is-move-only.md) | task 是 move-only | 拷贝删除、移动转移帧所有权，容器批量提交因此成立。 |
 | [0012](adr/0012-run-at-pins-a-task.md) | run_at：把任务钉在一个 engine 上 | `submit_at` 不做沿环重试，满载或停机时抛 `std::runtime_error`。 |
+| [0013](adr/0013-engine-affinity.md) | engine 可以绑定到一个核 | 亲和性归 engine，`init(count, cpus)` 显式传核表才绑；一个 engine 一个核，绑不上就退化为不绑。 |
 
 ## [roadmap.md](roadmap.md)
 

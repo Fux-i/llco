@@ -35,6 +35,7 @@ class engine {
     std::optional<io::ring>                 m_ring;
     std::atomic<int>                        m_event_fd{-1};
     std::atomic<bool>                       m_idle{false};
+    std::optional<unsigned>                 m_cpu; // core for the loop thread, empty means unpinned
     std::function<void()>                   m_before_idle; // test hook, runs right before the idle mark
 #if LLCO_TRACE
     std::string m_lane;
@@ -47,8 +48,10 @@ class engine {
   public:
     ~engine();
 
-    // runs a loop thread; the engine stays manual until then
-    void start();
+    // runs a loop thread; the engine stays manual until then. cpu pins that thread to one core,
+    // which isolated cores need because they get no load balancing; a cpu the kernel rejects
+    // (outside the cgroup cpuset) is ignored and the thread runs unpinned.
+    void start(std::optional<unsigned> cpu = std::nullopt);
 
     // stops the loop thread: it runs what was queued and waits for the ops the kernel still
     // holds before returning

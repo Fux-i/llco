@@ -35,8 +35,14 @@ task<> echo(int fd) {
         const auto bytes = co_await conn.recv(buffer);
         if (!bytes || *bytes == 0)
             break;
-        co_await conn.send(std::string_view{buffer.data(), *bytes});
-        std::println("[echo] {} bytes", *bytes);
+        // One send op is free to accept less than the whole buffer, so drain it in a loop.
+        for (std::size_t sent = 0; sent < *bytes;) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): bounded by *bytes
+            const auto out = co_await conn.send(std::string_view{buffer.data() + sent, *bytes - sent});
+            if (!out)
+                break;
+            sent += *out;
+        }
     }
     std::println("[close] fd {}", fd);
     conn.shutdown();

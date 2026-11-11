@@ -46,7 +46,8 @@ class connection {
     auto recv(std::span<std::byte> buffer) -> io::rw_awaiter;
     auto recv(std::span<char> buffer) -> io::rw_awaiter;
 
-    // Writes it all out; MSG_NOSIGNAL, so a dead peer is EPIPE and never a signal.
+    // One send op: writes at most the whole buffer and reports how many bytes went out, so a
+    // caller that must drain it all loops. MSG_NOSIGNAL, so a dead peer is EPIPE not a signal.
     auto send(std::span<std::byte> buffer) -> io::rw_awaiter;
     auto send(std::string_view buffer) -> io::rw_awaiter;
 

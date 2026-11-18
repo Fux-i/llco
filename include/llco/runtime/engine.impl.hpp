@@ -39,7 +39,9 @@ class slot_guard {
     explicit slot_guard(engine *current) noexcept : m_previous{engine_slot()} {
         engine_slot() = current;
     }
-    ~slot_guard() { engine_slot() = m_previous; }
+    ~slot_guard() {
+        engine_slot() = m_previous;
+    }
     CLASS_NO_COPY_MOVE(slot_guard);
 };
 
@@ -135,7 +137,7 @@ inline void engine::notify() noexcept {
     if (fd < 0)
         return;
     // A running loop will see the work itself; only a blocked one needs the ring.
-    if (!m_idle.exchange(false))
+    if (!m_idle.exchange(false, std::memory_order_seq_cst))
         return;
     m_wakeups.fetch_add(1, std::memory_order_relaxed);
     const std::uint64_t one = 1;
@@ -146,8 +148,8 @@ inline void engine::notify() noexcept {
 inline void engine::wait() noexcept {
     const int     fd = m_event_fd.load(std::memory_order_relaxed);
     std::uint64_t counter{};
-    while (::read(fd, &counter, sizeof counter) < 0 && errno == EINTR) {
-    }
+    while (::read(fd, &counter, sizeof counter) < 0 && errno == EINTR)
+        ;
 }
 
 inline void engine::loop(const std::stop_token &token) {
@@ -187,11 +189,11 @@ inline void engine::loop(const std::stop_token &token) {
         // in the queue, and one that lands after it wakes the loop. Reversing these two is a
         // lost wakeup. The stop token needs the same look: its callback went through the idle
         // check too and may have decided not to wake the loop, which then sleeps forever.
-        m_idle = true;
+        m_idle.store(true, std::memory_order_seq_cst);
         if (m_queue.empty() && ring().pending() == 0 && ring().sq_pending() == 0 &&
             !token.stop_requested())
             wait();
-        m_idle = false;
+        m_idle.store(false, std::memory_order_relaxed);
     }
 }
 

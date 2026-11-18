@@ -108,7 +108,7 @@ class event {
     void set(std::type_identity_t<U> value)
         requires(!std::is_void_v<U>)
     {
-        if (m_setter.exchange(true))
+        if (m_setter.exchange(true, std::memory_order_relaxed))
             return; // one-shot: repeated set is a no-op
         m_value.store(std::move(value));
         publish();
@@ -118,7 +118,7 @@ class event {
     void set()
         requires std::is_void_v<U>
     {
-        if (m_setter.exchange(true))
+        if (m_setter.exchange(true, std::memory_order_relaxed))
             return;
         publish();
     }

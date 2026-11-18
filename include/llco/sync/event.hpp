@@ -20,13 +20,13 @@ class event_value {
     std::optional<T> m_slot;
 
   public:
-    void store(T value) {
+    void store(T value) { // TODO: rvalue?
         m_slot.emplace(std::move(value));
     }
 
     // Copied: every waiter gets its own copy.
     auto load() const -> T {
-        return *m_slot; // NOLINT(bugprone-unchecked-optional-access): set() stores before any load
+        return *m_slot;
     }
 };
 
@@ -49,8 +49,6 @@ class event {
         node                   *next{};
     };
 
-    // head holds the waiter stack until set(), then this sentinel. Published nodes can only be
-    // woken by set(), so a waiter never resumes its own frame while the stack still links it.
     inline static node m_set_sentinel{};
 
     std::atomic<bool>      m_setter{false};
@@ -86,13 +84,12 @@ class event {
         }
 
         auto await_suspend(std::coroutine_handle<> handle) noexcept -> bool {
-            m_node = node{.handle = handle, .target = current_engine(), .next = nullptr};
+            m_node         = node{.handle = handle, .target = current_engine(), .next = nullptr};
             auto *expected = m_event.m_head.load(std::memory_order_acquire);
             while (expected != &m_set_sentinel) {
                 m_node.next = expected;
-                if (m_event.m_head.compare_exchange_weak(expected, &m_node,
-                                                         std::memory_order_acq_rel,
-                                                         std::memory_order_acquire))
+                if (m_event.m_head.compare_exchange_weak(
+                        expected, &m_node, std::memory_order_acq_rel, std::memory_order_acquire))
                     return true;
             }
             return false; // set() won the race: this node was never published
@@ -108,7 +105,9 @@ class event {
     CLASS_NO_COPY_MOVE(event);
 
     template <class U = T>
-    void set(std::type_identity_t<U> value) requires(!std::is_void_v<U>) {
+    void set(std::type_identity_t<U> value)
+        requires(!std::is_void_v<U>)
+    {
         if (m_setter.exchange(true))
             return; // one-shot: repeated set is a no-op
         m_value.store(std::move(value));
@@ -116,7 +115,9 @@ class event {
     }
 
     template <class U = T>
-    void set() requires std::is_void_v<U> {
+    void set()
+        requires std::is_void_v<U>
+    {
         if (m_setter.exchange(true))
             return;
         publish();
